@@ -18,16 +18,20 @@ object SimpleStreamClustering {
 
     val env = StreamExecutionEnvironment.getExecutionEnvironment
 
-    val input = readInput("/Users/gyfora/OneDrive/LIU/streamclustering/data_small.csv", env)
+    val input1 = readInput("/Users/gyfora/OneDrive/LIU/streamclustering/data1.csv", env).map(x=>{Thread.sleep(2);x})
+    val input2 = readInput("/Users/gyfora/OneDrive/LIU/streamclustering/data2.csv", env).map(x=>{Thread.sleep(2);x})
+    val input3 = readInput("/Users/gyfora/OneDrive/LIU/streamclustering/data3.csv", env).map(x=>{Thread.sleep(2);x})
 
-//    clusterNonParallel(input, new SimpleKMeans(4), "/Users/gyfora/OneDrive/LIU/streamclustering/nbKmeans.csv")
-//    clusterNonParallel(input, new SimpleKMeans(4, timeBiasedMean(0.1)), "/Users/gyfora/OneDrive/LIU/streamclustering/tbKmeans.csv")
-//    clusterNonParallel(input, new SimpleKMeans(4, timeBiasedMean(0.8)), "/Users/gyfora/OneDrive/LIU/streamclustering/tbKmeans2.csv")
     
-    clusterParallel(input, new SimpleKMeans(4), "/Users/gyfora/OneDrive/LIU/streamclustering/parallelNBKmeans.csv")
 
-    println(env.getExecutionPlan);
+    clusterNonParallel(input1, new SimpleKMeans(4), "/Users/gyfora/OneDrive/LIU/streamclustering/data1_nonParallelNB.csv")
+    clusterNonParallel(input1, new SimpleKMeans(4, timeBiasedMean(0.1)), "/Users/gyfora/OneDrive/LIU/streamclustering/data1_nonParallelTB.csv")
+
+    clusterParallel(input1, new ParallelKMeans(4, timeBiasedMean(0.1),100), "/Users/gyfora/OneDrive/LIU/streamclustering/data1_parallelTB.csv")
+    clusterParallel(input1, new ParallelKMeans(4, timeBiasedMean(0.1),100, distanceBased(0.5)), "/Users/gyfora/OneDrive/LIU/streamclustering/data1_parallelTB_D.csv")
+
     env.execute
+    
 
   }
 

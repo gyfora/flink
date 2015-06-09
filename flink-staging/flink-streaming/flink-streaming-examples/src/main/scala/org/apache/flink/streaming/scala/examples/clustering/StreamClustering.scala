@@ -23,10 +23,10 @@ object StreamClustering {
     if (output.equals("")) clustered.print else clustered.map(cp => (cp._1.id, cp._1.x, cp._1.y, cp._2)).writeAsCsv(output, writeMode = FileSystem.WriteMode.OVERWRITE).setParallelism(1)
   }
 
-  def clusterParallel(input: DataStream[Point], clusterer: MapFunction[Point, LabeledPoint], output: String = ""): Unit = {
+  def clusterParallel(input: DataStream[Point], clusterer: FlatMapFunction[Either[Point, Centers], Either[LabeledPoint, Centers]], output: String = ""): Unit = {
     val transformedInput: DataStream[Either[Point, Centers]] = input.map(Left(_))
 
-    val clustered = transformedInput.iterate(clusterStepFunction(new ParallelKMeans(4)), true)
+    val clustered = transformedInput.iterate(2000)(clusterStepFunction(clusterer), true)
 
     if (output.equals("")) clustered.print else clustered.map(cp => (cp._1.id, cp._1.x, cp._1.y, cp._2)).writeAsCsv(output, writeMode = FileSystem.WriteMode.OVERWRITE).setParallelism(1)
   }
@@ -64,25 +64,45 @@ object StreamClustering {
     val c = dists.reduce((x, y) => if (x._2 < y._2) x else y)._1
     (c, centers.updated(c, updateCenter(centers(c), point)))
   }
+  
+  def simpleCombiner(combineWeight: Double = 0.5)(oldCenters: Centers, newCenters:Centers): Centers = {
+    for ((oldC, newC) <- oldCenters.zip(newCenters)) yield (combineWithWeight(combineWeight, oldC._1, newC._1), oldC._2)
+  }
+  
+  def distanceBased(combineWeight: Double = 0.5)(oldCenters: Centers, newCenters:Centers): Centers = {
+    
+    var oCenters = oldCenters;
+    
+    for (center <- newCenters) yield {
+      val dists = for (i <- 0 to oCenters.size - 1) yield (i, eucDist(oCenters(i)._1,center._1))
+      val c = dists.reduce((x, y) => if (x._2 < y._2) x else y)._1
+      val updated: PointWithCount = (combineWithWeight(combineWeight, oCenters(c)._1,center._1),1)
+      oCenters = removeIndex(oCenters, c)
+      updated
+    }
+  }
+  
+  def removeIndex[A](list: List[A], ix: Int) = if (list.size < ix) list
+                           else list.take(ix) ++ list.drop(ix+1)
 
   class SimpleKMeans(numClusters: Int, updateCenter: (PointWithCount, Point) => PointWithCount = nonBiasedMean) extends MapFunction[Point, LabeledPoint] {
 
     var centers: Centers = List()
-    val cluster = clusterAndUpdateCenters(updateCenter)(centers) _
+    val cluster = clusterAndUpdateCenters(updateCenter) _ 
 
     def map(point: Point): LabeledPoint = {
       if (centers.size < numClusters) {
         centers = centers :+ (point, centers.size.toLong)
         (point, centers.size - 1)
       } else {
-        val (label, newCenters) = cluster(point)
+        val (label, newCenters) = cluster(centers)(point)
         centers = newCenters
         (point, label)
       }
     }
   }
 
-  class ParallelKMeans(numClusters: Int, updateCenter: (PointWithCount, Point) => PointWithCount = nonBiasedMean, broadcastEvery: Int = 100) extends FlatMapFunction[Either[Point, Centers], Either[LabeledPoint, Centers]] {
+  class ParallelKMeans(numClusters: Int, updateCenter: (PointWithCount, Point) => PointWithCount = nonBiasedMean, broadcastEvery: Int = 100, combiner: (Centers,Centers) => Centers = simpleCombiner(0.5)) extends FlatMapFunction[Either[Point, Centers], Either[LabeledPoint, Centers]] {
 
     var centers: Centers = List()
     var countSinceLastBroadcast = 0
@@ -111,8 +131,7 @@ object StreamClustering {
         }
         case Right(newCenters) => {
           if (centers.size == numClusters) {
-            println(newCenters.map(_._1.x).sum)
-            centers = for ((oldC, newC) <- centers.zip(newCenters)) yield (combineWithWeight(0.5, oldC._1, newC._1), oldC._2)
+            centers = combiner(centers,newCenters)
           }
         }
       }
