@@ -160,13 +160,13 @@ public class StatefulOperatorTest {
 		return op;
 	}
 
-	public static class StatefulMapper extends RichMapFunction<Integer, String> implements
-			Checkpointed<Integer> {
+	public static class StatefulMapper extends RichMapFunction<Integer, String> {
 	private static final long serialVersionUID = -9007873655253339356L;
 		OperatorState<Integer> counter;
 		OperatorState<Integer> groupCounter;
 		OperatorState<String> concat;
 		
+		@State
 		Integer checkpointedCounter = 0;
 
 		@Override
@@ -210,17 +210,6 @@ public class StatefulOperatorTest {
 				Integer expected = key < 3 ? 2 : 1;
 				assertEquals(expected, count.getValue());
 			}
-		}
-
-		@Override
-		public Integer snapshotState(long checkpointId, long checkpointTimestamp)
-				throws Exception {
-			return checkpointedCounter;
-		}
-
-		@Override
-		public void restoreState(Integer state) {
-			this.checkpointedCounter = (Integer) state;
 		}
 	}
 	

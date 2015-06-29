@@ -33,11 +33,11 @@ import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FileStateHandle;
-import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
+import org.apache.flink.streaming.api.state.State;
 import org.junit.Assert;
 
 /**
@@ -182,11 +182,12 @@ public class ProcessFailureStreamingRecoveryITCase extends AbstractProcessFailur
 		}
 	}
 
-	private static class CheckpointedSink extends RichSinkFunction<Long> implements Checkpointed<Long> {
+	private static class CheckpointedSink extends RichSinkFunction<Long> {
 
 		private long stepSize;
 		private long congruence;
 		private long toCollect;
+		@State
 		private Long collected = 0L;
 		private long end;
 
@@ -213,16 +214,6 @@ public class ProcessFailureStreamingRecoveryITCase extends AbstractProcessFailur
 				Assert.fail("Collected <= toCollect: " + collected + " > " + toCollect);
 			}
 
-		}
-
-		@Override
-		public Long snapshotState(long checkpointId, long checkpointTimestamp) throws Exception {
-			return collected;
-		}
-
-		@Override
-		public void restoreState(Long state) {
-			collected = state;
 		}
 	}
 }

@@ -282,11 +282,6 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 					StreamOperator<?> chainedOperator = outputHandler.getChainedOperators().get(i);
 
 					if (chainedState != null) {
-						if (chainedState.f0 != null) {
-							((StatefulStreamOperator) chainedOperator).confirmCheckpointCompleted(
-									checkpointId, null, chainedState.f0);
-						}
-
 						if (chainedState.f1 != null) {
 							if (chainedOperator instanceof StatefulStreamOperator) {
 								for (Entry<String, PartitionedStateHandle> stateEntry : chainedState.f1

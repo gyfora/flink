@@ -33,12 +33,12 @@ import org.apache.flink.api.common.functions.RichReduceFunction;
 import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
+import org.apache.flink.streaming.api.state.State;
 import org.apache.flink.test.util.ForkableFlinkMiniCluster;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -336,8 +336,9 @@ public class StreamCheckpointingITCase {
 		}
 	}
 
-	private static class StringRichFilterFunction extends RichFilterFunction<String> implements Checkpointed<Long> {
+	private static class StringRichFilterFunction extends RichFilterFunction<String> {
 
+		@State
 		Long count = 0L;
 		static final long[] counts = new long[PARALLELISM];
 		
@@ -350,16 +351,6 @@ public class StreamCheckpointingITCase {
 		@Override
 		public void close() {
 			counts[getRuntimeContext().getIndexOfThisSubtask()] = count;
-		}
-
-		@Override
-		public Long snapshotState(long checkpointId, long checkpointTimestamp) throws Exception {
-			return count;
-		}
-
-		@Override
-		public void restoreState(Long state) {
-			count = state;
 		}
 	}
 

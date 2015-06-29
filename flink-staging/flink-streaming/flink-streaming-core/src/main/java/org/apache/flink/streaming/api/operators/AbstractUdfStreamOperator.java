@@ -19,6 +19,7 @@
 package org.apache.flink.streaming.api.operators;
 
 import java.io.Serializable;
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -31,7 +32,7 @@ import org.apache.flink.runtime.state.PartitionedStateHandle;
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.runtime.state.StateHandleProvider;
 import org.apache.flink.streaming.api.checkpoint.CheckpointCommitter;
-import org.apache.flink.streaming.api.checkpoint.Checkpointed;
+import org.apache.flink.streaming.api.state.OperatorStateUtils;
 import org.apache.flink.streaming.api.state.StreamOperatorState;
 import org.apache.flink.streaming.runtime.tasks.StreamingRuntimeContext;
 
@@ -51,6 +52,7 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function & Serial
 	private static final long serialVersionUID = 1L;
 
 	protected final F userFunction;
+	private Field[] stateFields;
 
 	public AbstractUdfStreamOperator(F userFunction) {
 		this.userFunction = userFunction;
@@ -60,6 +62,7 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function & Serial
 	public void setup(Output<OUT> output, StreamingRuntimeContext runtimeContext) {
 		super.setup(output, runtimeContext);
 		FunctionUtils.setFunctionRuntimeContext(userFunction, runtimeContext);
+		stateFields = OperatorStateUtils.getStateFields(userFunction);
 	}
 
 
@@ -79,8 +82,8 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function & Serial
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	public void restoreInitialState(Tuple2<StateHandle<Serializable>, Map<String, PartitionedStateHandle>> snapshots) throws Exception {
 		// Restore state using the Checkpointed interface
-		if (userFunction instanceof Checkpointed) {
-			((Checkpointed) userFunction).restoreState(snapshots.f0.getState());
+		if (snapshots.f0 != null) {
+			OperatorStateUtils.restoreStates((Object[]) snapshots.f0.getState(), userFunction, stateFields);
 		}
 		
 		if (snapshots.f1 != null) {
@@ -119,10 +122,10 @@ public abstract class AbstractUdfStreamOperator<OUT, F extends Function & Serial
 		
 		StateHandle<Serializable> checkpointedSnapshot = null;
 
-		if (userFunction instanceof Checkpointed) {
+		if (stateFields.length > 0) {
 			StateHandleProvider<Serializable> provider = runtimeContext.getStateHandleProvider();
-			checkpointedSnapshot = provider.createStateHandle(((Checkpointed) userFunction)
-					.snapshotState(checkpointId, timestamp));
+			Serializable annotatedState = OperatorStateUtils.getStates(userFunction, stateFields);
+			checkpointedSnapshot = provider.createStateHandle(annotatedState);
 		}
 		
 		if (operatorStateSnapshots != null || checkpointedSnapshot != null) {
