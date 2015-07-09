@@ -273,5 +273,9 @@ public class StreamMockEnvironment implements Environment {
 	@Override
 	public void acknowledgeCheckpoint(long checkpointId, StateHandle<?> state) {
 	}
+	
+	@Override
+	public void acknowledgeConfirm(long checkpointId) {
+	}
 }
 

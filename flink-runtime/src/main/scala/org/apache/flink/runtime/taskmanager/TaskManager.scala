@@ -431,7 +431,7 @@ extends Actor with ActorLogMessages with ActorSynchronousLogging {
         val timestamp = message.getTimestamp
         val state = message.getState
 
-        log.debug(s"Receiver ConfirmCheckpoint ${checkpointId}@${timestamp} for $taskExecutionId.")
+       log.debug(s"Receiver ConfirmCheckpoint ${checkpointId}@${timestamp} for $taskExecutionId.")
 
         val task = runningTasks.get(taskExecutionId)
         if (task != null) {

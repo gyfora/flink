@@ -303,8 +303,8 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 					}
 				}
 			}
-
 		}
+		getEnvironment().acknowledgeConfirm(checkpointId);
 	}
 	
 	

@@ -47,7 +47,7 @@ import org.apache.flink.runtime.messages.RegistrationMessages._
 import org.apache.flink.runtime.messages.TaskManagerMessages.{Heartbeat, SendStackTrace}
 import org.apache.flink.runtime.messages.TaskMessages.{PartitionState, UpdateTaskExecutionState}
 import org.apache.flink.runtime.messages.accumulators._
-import org.apache.flink.runtime.messages.checkpoint.{AbstractCheckpointMessage, AcknowledgeCheckpoint}
+import org.apache.flink.runtime.messages.checkpoint.{AbstractCheckpointMessage, AcknowledgeCheckpoint, AcknowledgeCommit}
 import org.apache.flink.runtime.net.NetUtils
 import org.apache.flink.runtime.process.ProcessReaper
 import org.apache.flink.runtime.security.SecurityUtils
@@ -56,7 +56,6 @@ import org.apache.flink.runtime.taskmanager.TaskManager
 import org.apache.flink.runtime.util.{EnvironmentInformation, SerializedValue, ZooKeeperUtil}
 import org.apache.flink.runtime.{ActorLogMessages, ActorSynchronousLogging, StreamingMode}
 import org.apache.flink.util.{ExceptionUtils, InstantiationUtil}
-
 import scala.collection.JavaConverters._
 import scala.concurrent._
 import scala.concurrent.duration._
@@ -624,32 +623,33 @@ class JobManager(protected val flinkConfiguration: Configuration,
    * @param actorMessage The checkpoint actor message.
    */
   private def handleCheckpointMessage(actorMessage: AbstractCheckpointMessage): Unit = {
-    actorMessage match {
-      case ackMessage: AcknowledgeCheckpoint =>
-        val jid = ackMessage.getJob()
-        currentJobs.get(jid) match {
-          case Some((graph, _)) =>
-            val coordinator = graph.getCheckpointCoordinator()
-            if (coordinator != null) {
-              try {
-                coordinator.receiveAcknowledgeMessage(ackMessage)
-              }
-              catch {
-                case t: Throwable =>
-                  log.error(s"Error in CheckpointCoordinator while processing $ackMessage", t)
-              }
+
+    val jid = actorMessage.getJob()
+    currentJobs.get(jid) match {
+      case Some((graph, _)) =>
+        val coordinator = graph.getCheckpointCoordinator()
+        if (coordinator != null) {
+          try {
+            actorMessage match {
+              case checkpointAck: AcknowledgeCheckpoint => 
+                coordinator.receivePreCommitAck(checkpointAck)
+              case confirmAck: AcknowledgeCommit => 
+                coordinator.receiveCommitAck(confirmAck);
+              // unknown checkpoint message
+              case _ => unhandled(actorMessage)
             }
-            else {
-              log.error(
-                s"Received ConfirmCheckpoint message for job $jid with no CheckpointCoordinator")
-            }
-            
-          case None => log.error(s"Received ConfirmCheckpoint for unavailable job $jid")
+          } catch {
+            case t: Throwable =>
+              log.error(s"Error in CheckpointCoordinator while processing $actorMessage", t)
+          }
+        } else {
+          log.error(
+            s"Received checkpoint message for job $jid with no CheckpointCoordinator")
         }
 
-      // unknown checkpoint message
-      case _ => unhandled(actorMessage)
-    }
+      case None => log.error(s"Received checkpoint message for unavailable job $jid")
+    }     
+    
   }
   
   /**

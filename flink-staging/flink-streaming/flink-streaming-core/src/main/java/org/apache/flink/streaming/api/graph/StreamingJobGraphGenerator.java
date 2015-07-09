@@ -394,8 +394,8 @@ public class StreamingJobGraphGenerator {
 			for (JobVertex vertex : jobVertices.values()) {
 				if (vertex.isInputVertex()) {
 					triggerVertices.add(vertex.getID());
-					commitVertices.add(vertex.getID());
 				}
+				commitVertices.add(vertex.getID());
 				ackVertices.add(vertex.getID());
 			}
 

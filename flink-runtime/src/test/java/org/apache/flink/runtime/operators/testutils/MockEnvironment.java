@@ -272,4 +272,9 @@ public class MockEnvironment implements Environment {
 	public void acknowledgeCheckpoint(long checkpointId, StateHandle<?> state) {
 		throw new UnsupportedOperationException();
 	}
+	
+	@Override
+	public void acknowledgeConfirm(long checkpointId) {
+		throw new UnsupportedOperationException();
+	}
 }

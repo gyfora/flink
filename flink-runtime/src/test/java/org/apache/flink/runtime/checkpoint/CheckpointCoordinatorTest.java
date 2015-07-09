@@ -175,19 +175,19 @@ public class CheckpointCoordinatorTest {
 			}
 			
 			// acknowledge from one of the tasks
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, attemptID2, checkpointId));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, attemptID2, checkpointId));
 			assertEquals(1, checkpoint.getNumberOfAcknowledgedTasks());
 			assertEquals(1, checkpoint.getNumberOfNonAcknowledgedTasks());
 			assertFalse(checkpoint.isDiscarded());
 			assertFalse(checkpoint.isFullyAcknowledged());
 
 			// acknowledge the same task again (should not matter)
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, attemptID2, checkpointId));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, attemptID2, checkpointId));
 			assertFalse(checkpoint.isDiscarded());
 			assertFalse(checkpoint.isFullyAcknowledged());
 
 			// acknowledge the other task.
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, attemptID1, checkpointId));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, attemptID1, checkpointId));
 			
 			// the checkpoint is internally converted to a successful checkpoint and the
 			// pending checkpoint object is disposed
@@ -218,8 +218,8 @@ public class CheckpointCoordinatorTest {
 			coord.triggerCheckpoint(timestampNew);
 
 			long checkpointIdNew = coord.getPendingCheckpoints().entrySet().iterator().next().getKey();
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, attemptID1, checkpointIdNew));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, attemptID2, checkpointIdNew));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, attemptID1, checkpointIdNew));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, attemptID2, checkpointIdNew));
 			
 			assertEquals(0, coord.getNumberOfPendingCheckpoints());
 			assertEquals(1, coord.getNumberOfRetainedSuccessfulCheckpoints());
@@ -305,7 +305,7 @@ public class CheckpointCoordinatorTest {
 					new TriggerCheckpoint(jid, triggerAttemptID2, checkpointId1, timestamp1), triggerAttemptID2);
 			
 			// acknowledge one of the three tasks
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId1));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId1));
 			
 			// start the second checkpoint
 			// trigger the first checkpoint. this should succeed
@@ -331,10 +331,10 @@ public class CheckpointCoordinatorTest {
 			
 			// we acknowledge the remaining two tasks from the first
 			// checkpoint and two tasks from the second checkpoint
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId1));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId2));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId1));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId2));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId1));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId2));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId1));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId2));
 			
 			// now, the first checkpoint should be confirmed
 			assertEquals(1, coord.getNumberOfPendingCheckpoints());
@@ -346,7 +346,7 @@ public class CheckpointCoordinatorTest {
 					new ConfirmCheckpoint(jid, commitAttemptID, checkpointId1, timestamp1, null), commitAttemptID);
 			
 			// send the last remaining ack for the second checkpoint
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId2));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId2));
 
 			// now, the second checkpoint should be confirmed
 			assertEquals(0, coord.getNumberOfPendingCheckpoints());
@@ -432,7 +432,7 @@ public class CheckpointCoordinatorTest {
 					new TriggerCheckpoint(jid, triggerAttemptID2, checkpointId1, timestamp1), triggerAttemptID2);
 
 			// acknowledge one of the three tasks
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId1));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId1));
 
 			// start the second checkpoint
 			// trigger the first checkpoint. this should succeed
@@ -458,10 +458,10 @@ public class CheckpointCoordinatorTest {
 
 			// we acknowledge one more task from the first checkpoint and the second
 			// checkpoint completely. The second checkpoint should then subsume the first checkpoint
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId2));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId2));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId1));
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId2));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId2));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId2));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpointId1));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID2, checkpointId2));
 
 			// now, the second checkpoint should be confirmed, and the first discarded
 			// actually both pending checkpoints are discarded, and the second has been transformed
@@ -485,7 +485,7 @@ public class CheckpointCoordinatorTest {
 					new ConfirmCheckpoint(jid, commitAttemptID, checkpointId2, timestamp2, null), commitAttemptID);
 
 			// send the last remaining ack for the first checkpoint. This should not do anything
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId1));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID3, checkpointId1));
 			
 			coord.shutdown();
 		}
@@ -534,7 +534,7 @@ public class CheckpointCoordinatorTest {
 			PendingCheckpoint checkpoint = coord.getPendingCheckpoints().values().iterator().next();
 			assertFalse(checkpoint.isDiscarded());
 			
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpoint.getCheckpointId()));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID1, checkpoint.getCheckpointId()));
 			
 			// wait until the checkpoint must have expired.
 			// we check every 250 msecs conservatively for 5 seconds
@@ -594,13 +594,13 @@ public class CheckpointCoordinatorTest {
 			// non of the messages should throw an exception
 			
 			// wrong job id
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(new JobID(), ackAttemptID1, checkpointId));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(new JobID(), ackAttemptID1, checkpointId));
 			
 			// unknown checkpoint
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, ackAttemptID1, 1L));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, ackAttemptID1, 1L));
 			
 			// unknown ack vertex
-			coord.receiveAcknowledgeMessage(new AcknowledgeCheckpoint(jid, new ExecutionAttemptID(), checkpointId));
+			coord.receivePreCommitAck(new AcknowledgeCheckpoint(jid, new ExecutionAttemptID(), checkpointId));
 
 			coord.shutdown();
 		}

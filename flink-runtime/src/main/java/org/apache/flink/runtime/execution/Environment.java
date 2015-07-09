@@ -166,6 +166,8 @@ public interface Environment {
 	 * @param state A handle to the state to be included in the checkpoint.   
 	 */
 	void acknowledgeCheckpoint(long checkpointId, StateHandle<?> state);
+	
+	void acknowledgeConfirm(long checkpointId);
 
 	// --------------------------------------------------------------------------------------------
 	//  Fields relevant to the I/O system. Should go into Task

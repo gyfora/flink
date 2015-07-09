@@ -18,25 +18,6 @@
 
 package org.apache.flink.runtime.checkpoint;
 
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import akka.actor.PoisonPill;
-import akka.actor.Props;
-
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.runtime.executiongraph.Execution;
-import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
-import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
-import org.apache.flink.runtime.executiongraph.ExecutionVertex;
-import org.apache.flink.runtime.jobgraph.JobVertexID;
-import org.apache.flink.runtime.messages.checkpoint.AcknowledgeCheckpoint;
-import org.apache.flink.runtime.messages.checkpoint.ConfirmCheckpoint;
-import org.apache.flink.runtime.messages.checkpoint.TriggerCheckpoint;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.runtime.util.SerializedValue;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -48,6 +29,24 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.runtime.executiongraph.Execution;
+import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.executiongraph.ExecutionJobVertex;
+import org.apache.flink.runtime.executiongraph.ExecutionVertex;
+import org.apache.flink.runtime.jobgraph.JobVertexID;
+import org.apache.flink.runtime.messages.checkpoint.AcknowledgeCheckpoint;
+import org.apache.flink.runtime.messages.checkpoint.AcknowledgeCommit;
+import org.apache.flink.runtime.messages.checkpoint.ConfirmCheckpoint;
+import org.apache.flink.runtime.messages.checkpoint.TriggerCheckpoint;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import akka.actor.ActorRef;
+import akka.actor.ActorSystem;
+import akka.actor.PoisonPill;
+import akka.actor.Props;
 
 /**
  * The checkpoint coordinator coordinates the distributed snapshots of operators and state.
@@ -78,6 +77,8 @@ public class CheckpointCoordinator {
 	private final ExecutionVertex[] tasksToCommitTo;
 
 	private final Map<Long, PendingCheckpoint> pendingCheckpoints;
+	
+	private final Map<Long, PendingCheckpoint> committingCheckpoints;
 	
 	private final ArrayDeque<SuccessfulCheckpoint> completedCheckpoints;
 	
@@ -129,6 +130,7 @@ public class CheckpointCoordinator {
 		this.tasksToWaitFor = tasksToWaitFor;
 		this.tasksToCommitTo = tasksToCommitTo;
 		this.pendingCheckpoints = new LinkedHashMap<Long, PendingCheckpoint>();
+		this.committingCheckpoints = new LinkedHashMap<Long, PendingCheckpoint>();
 		this.completedCheckpoints = new ArrayDeque<SuccessfulCheckpoint>(numSuccessfulCheckpointsToRetain + 1);
 		this.recentPendingCheckpoints = new ArrayDeque<Long>(NUM_GHOST_CHECKPOINT_IDS);
 		this.userClassLoader = userClassLoader;
@@ -277,7 +279,8 @@ public class CheckpointCoordinator {
 					throw new IllegalStateException("Checkpoint coordinator has been shutdown.");
 				}
 				pendingCheckpoints.put(checkpointID, checkpoint);
-				timer.schedule(canceller, checkpointTimeout);
+				// With out-of-core state we need to commit every checkpoint
+				// timer.schedule(canceller, checkpointTimeout);
 			}
 
 			// send the messages to the tasks that trigger their checkpoint
@@ -305,7 +308,66 @@ public class CheckpointCoordinator {
 		}
 	}
 	
-	public void receiveAcknowledgeMessage(AcknowledgeCheckpoint message) {
+	public void receiveCommitAck(AcknowledgeCommit message) {
+		if (shutdown || message == null) {
+			return;
+		}
+		if (!job.equals(message.getJob())) {
+			LOG.error("Received AcknowledgeCommit message for wrong job: {}", message);
+			return;
+		}
+		
+		final long checkpointId = message.getCheckpointId();
+
+
+		SuccessfulCheckpoint completed = null;
+		PendingCheckpoint committing;
+		synchronized (lock) {
+			// we need to check inside the lock for being shutdown as well, otherwise we
+			// get races and invalid error log messages
+			if (shutdown) {
+				return;
+			}
+			committing = committingCheckpoints.get(checkpointId);
+			
+			if (committing != null && !committing.isDiscarded()) {
+				if (committing.acknowledgeTask(message.getTaskExecutionId(), null)) {
+					if (committing.isFullyAcknowledged()) {
+						LOG.info("Completed commit " + checkpointId);
+
+						completed = committing.toCompletedCheckpoint();
+						completedCheckpoints.addLast(completed);
+						if (completedCheckpoints.size() > numSuccessfulCheckpointsToRetain) {
+							completedCheckpoints.removeFirst().discard(userClassLoader);
+						}
+						committingCheckpoints.remove(checkpointId);
+						rememberRecentCheckpointId(checkpointId);
+											}
+				}
+				else {
+					// checkpoint did not accept message
+					LOG.error("Received duplicate or invalid commit ack message for checkpoint " + checkpointId
+							+ " , task " + message.getTaskExecutionId());
+				}
+			}
+			else if (committing != null) {
+				// this should not happen
+				throw new IllegalStateException(
+						"Received message for discarded but non-removed checkpoint " + checkpointId);
+			}
+			else {
+				// message is for an unknown checkpoint, or comes too late (checkpoint disposed)
+				if (recentPendingCheckpoints.contains(checkpointId)) {
+					LOG.warn("Received late message for now expired checkpoint attempt " + checkpointId);
+				}
+				else {
+					LOG.info("Received commit message for non-existing checkpoint " + checkpointId);
+				}
+			}
+		}
+	}
+	
+	public void receivePreCommitAck(AcknowledgeCheckpoint message) {
 		if (shutdown || message == null) {
 			return;
 		}
@@ -316,7 +378,7 @@ public class CheckpointCoordinator {
 		
 		final long checkpointId = message.getCheckpointId();
 
-		SuccessfulCheckpoint completed = null;
+		PendingCheckpoint committing = null;
 		PendingCheckpoint checkpoint;
 		synchronized (lock) {
 			// we need to check inside the lock for being shutdown as well, otherwise we
@@ -329,19 +391,39 @@ public class CheckpointCoordinator {
 			
 			if (checkpoint != null && !checkpoint.isDiscarded()) {
 				if (checkpoint.acknowledgeTask(message.getTaskExecutionId(), message.getState())) {
-					
 					if (checkpoint.isFullyAcknowledged()) {
-						LOG.info("Completed checkpoint " + checkpointId);
-
-						completed = checkpoint.toCompletedCheckpoint();
-						completedCheckpoints.addLast(completed);
-						if (completedCheckpoints.size() > numSuccessfulCheckpointsToRetain) {
-							completedCheckpoints.removeFirst().discard(userClassLoader);
+						LOG.info("Completed checkpoint starting to commit " + checkpointId);
+						
+						ExecutionAttemptID[] triggerIDs = new ExecutionAttemptID[tasksToTrigger.length];
+						for (int i = 0; i < tasksToTrigger.length; i++) {
+							Execution ee = tasksToTrigger[i].getCurrentExecutionAttempt();
+							if (ee != null) {
+								triggerIDs[i] = ee.getAttemptId();
+							} else {
+								throw new RuntimeException();
+							}
 						}
+
+						// next, check if all tasks that need to acknowledge the checkpoint are running.
+						// if not, abort the checkpoint
+						Map<ExecutionAttemptID, ExecutionVertex> ackTasks =
+											new HashMap<ExecutionAttemptID, ExecutionVertex>(tasksToWaitFor.length);
+
+						for (ExecutionVertex ev : tasksToWaitFor) {
+							Execution ee = ev.getCurrentExecutionAttempt();
+							if (ee != null) {
+								ackTasks.put(ee.getAttemptId(), ev);
+							} else {
+								throw new RuntimeException("Checkpoint acknowledging task is not being executed at the moment. Aborting checkpoint.");
+							}
+						}
+						
+						committing = new CommittingCheckpoint(checkpoint, ackTasks);
+						committingCheckpoints.put(committing.getCheckpointId(), committing);
 						pendingCheckpoints.remove(checkpointId);
 						rememberRecentCheckpointId(checkpointId);
 						
-						dropSubsumedCheckpoints(completed.getTimestamp());
+//						dropSubsumedCheckpoints(completed.getTimestamp());
 					}
 				}
 				else {
@@ -366,19 +448,14 @@ public class CheckpointCoordinator {
 			}
 		}
 		
-		// send the confirmation messages to the necessary targets. we do this here
-		// to be outside the lock scope
-		if (completed != null) {
-			final long timestamp = completed.getTimestamp();
-			
+		if (committing != null) {
+			final long timestamp = committing.getCheckpointTimestamp();
 			for (ExecutionVertex ev : tasksToCommitTo) {
 				Execution ee = ev.getCurrentExecutionAttempt();
 				if (ee != null) {
 					ExecutionAttemptID attemptId = ee.getAttemptId();
-					StateForTask stateForTask = completed.getState(ev.getJobvertexId());
-					SerializedValue<StateHandle<?>> taskState = (stateForTask != null) ? stateForTask.getState() : null;
 					ConfirmCheckpoint confirmMessage = new ConfirmCheckpoint(job, attemptId, checkpointId, 
-							timestamp, taskState);
+							timestamp, null);
 					ev.sendMessageToCurrentExecution(confirmMessage, ee.getAttemptId());
 				}
 			}
