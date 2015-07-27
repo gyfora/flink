@@ -24,34 +24,25 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.flink.api.common.functions.RichFilterFunction;
-import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.common.functions.RichReduceFunction;
 import org.apache.flink.api.common.state.OperatorState;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.apache.flink.test.util.ForkableFlinkMiniCluster;
-import org.apache.flink.util.Collector;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * A simple test that runs a streaming topology with checkpointing enabled.
@@ -102,7 +93,7 @@ public class StreamCheckpointingITCase {
 	 * Runs the following program:
 	 *
 	 * <pre>
-	 *     [ (source)->(filter)->(map) ] -> [ (map) ] -> [ (groupBy/reduce)->(sink) ]
+	 *     [ (source)->(filter) ]-s->[ (map) ] -> [ (map) ] -> [ (groupBy/reduce)->(sink) ]
 	 * </pre>
 	 */
 	@Test
@@ -122,7 +113,7 @@ public class StreamCheckpointingITCase {
 			
 			stream
 					// -------------- first vertex, chained to the source ----------------
-					.filter(new StringRichFilterFunction())
+					.filter(new StringRichFilterFunction()).shuffle()
 
 					// -------------- seconds vertex - the stateful one that also fails ----------------
 					.map(new StringPrefixCountRichMapFunction())
@@ -131,28 +122,13 @@ public class StreamCheckpointingITCase {
 
 					// -------------- third vertex - reducer and the sink ----------------
 					.groupBy("prefix")
-					.reduce(new OnceFailingReducer(NUM_STRINGS))
-					.addSink(new RichSinkFunction<PrefixCount>() {
-
-						private Map<Character, Long> counts = new HashMap<Character, Long>();
+					.map(new OnceFailingReducer(NUM_STRINGS))
+					.addSink(new SinkFunction<PrefixCount>() {
 
 						@Override
-						public void invoke(PrefixCount value) {
-							Character first = value.prefix.charAt(0);
-							Long previous = counts.get(first);
-							if (previous == null) {
-								counts.put(first, value.count);
-							} else {
-								counts.put(first, Math.max(previous, value.count));
-							}
+						public void invoke(PrefixCount value) throws Exception {
+							// Do nothing here
 						}
-
-//						@Override
-//						public void close() {
-//							for (Long count : counts.values()) {
-//								assertEquals(NUM_STRINGS / 40, count.longValue());
-//							}
-//						}
 					});
 
 			env.execute();
@@ -171,14 +147,20 @@ public class StreamCheckpointingITCase {
 			for (long l : StatefulCounterFunction.counts) {
 				countSum += l;
 			}
-
-			// verify that we counted exactly right
 			
-			// this line should be uncommented once the "exactly one off by one" is fixed
-			// if this fails we see at which point the count is off
+			long reduceInputCount = 0;
+			for(long l: OnceFailingReducer.counts){
+				reduceInputCount += l;
+			}
+			
 			assertEquals(NUM_STRINGS, filterSum);
 			assertEquals(NUM_STRINGS, mapSum);
 			assertEquals(NUM_STRINGS, countSum);
+			assertEquals(NUM_STRINGS, reduceInputCount);
+			// verify that we counted exactly right
+			for (Long count : OnceFailingReducer.prefixCounts.values()) {
+				assertEquals(new Long(NUM_STRINGS / 40), count);
+			}
 		}
 		catch (Exception e) {
 			e.printStackTrace();
@@ -285,7 +267,10 @@ public class StreamCheckpointingITCase {
 		
 	}
 	
-	private static class OnceFailingReducer extends RichReduceFunction<PrefixCount> {
+	private static class OnceFailingReducer extends RichMapFunction<PrefixCount, PrefixCount> {
+		
+		private static Map<String, Long> prefixCounts = new ConcurrentHashMap<String, Long>();
+		static final long[] counts = new long[PARALLELISM];
 
 		private static volatile boolean hasFailed = false;
 
@@ -293,30 +278,44 @@ public class StreamCheckpointingITCase {
 		
 		private long failurePos;
 		private long count;
+		
+		private OperatorState<Long> pCount;
+		private OperatorState<Long> inputCount;
 
 		OnceFailingReducer(long numElements) {
 			this.numElements = numElements;
 		}
 		
 		@Override
-		public void open(Configuration parameters) {
+		public void open(Configuration parameters) throws IOException {
 			long failurePosMin = (long) (0.4 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
 			long failurePosMax = (long) (0.7 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
 
 			failurePos = (new Random().nextLong() % (failurePosMax - failurePosMin)) + failurePosMin;
 			count = 0;
+			pCount = getRuntimeContext().getOperatorState("prefix-count", 0L, true);
+			inputCount = getRuntimeContext().getOperatorState("input-count", 0L, false);
 		}
 		
 		@Override
-		public PrefixCount reduce(PrefixCount value1, PrefixCount value2) throws Exception {
+		public void close() throws IOException {
+			counts[getRuntimeContext().getIndexOfThisSubtask()] = inputCount.value();
+		}
+
+		@Override
+		public PrefixCount map(PrefixCount value) throws Exception {
 			count++;
 			if (!hasFailed && count >= failurePos) {
 				hasFailed = true;
 				throw new Exception("Test Failure");
 			}
-			
-			value1.count += value2.count;
-			return value1;
+			inputCount.update(inputCount.value() + 1);
+		
+			long currentPrefixCount = pCount.value() + value.count;
+			pCount.update(currentPrefixCount);
+			prefixCounts.put(value.prefix, currentPrefixCount);
+			value.count = currentPrefixCount;
+			return value;
 		}
 	}
 	
@@ -324,7 +323,7 @@ public class StreamCheckpointingITCase {
 	//  Custom Type Classes
 	// --------------------------------------------------------------------------------------------
 
-	public static class PrefixCount {
+	public static class PrefixCount implements Serializable {
 
 		public String prefix;
 		public String value;
