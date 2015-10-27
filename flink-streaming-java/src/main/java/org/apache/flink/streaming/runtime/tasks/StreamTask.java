@@ -138,6 +138,8 @@ public abstract class StreamTask<OUT, Operator extends StreamOperator<OUT>>
 	/** Flag to mark the task "in operation", in which case check
 	 * needs to be initialized to true, so that early cancel() before invoke() behaves correctly */
 	private volatile boolean isRunning;
+
+	private long recoveryTimestamp;
 	
 
 	// ------------------------------------------------------------------------
@@ -382,8 +384,9 @@ public abstract class StreamTask<OUT, Operator extends StreamOperator<OUT>>
 	// ------------------------------------------------------------------------
 	
 	@Override
-	public void setInitialState(StreamTaskStateList initialState) {
+	public void setInitialState(StreamTaskStateList initialState, long recoveryTimestamp) {
 		lazyRestoreState = initialState;
+		this.recoveryTimestamp = recoveryTimestamp;
 	}
 	
 	public void restoreStateLazy() throws Exception {
@@ -403,7 +406,7 @@ public abstract class StreamTask<OUT, Operator extends StreamOperator<OUT>>
 					
 					if (state != null && operator != null) {
 						LOG.debug("Task {} in chain ({}) has checkpointed state", i, getName());
-						operator.restoreState(state);
+						operator.restoreState(state, recoveryTimestamp);
 					}
 					else if (operator != null) {
 						LOG.debug("Task {} in chain ({}) does not have checkpointed state", i, getName());

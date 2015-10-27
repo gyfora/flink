@@ -541,8 +541,8 @@ public class NonKeyedWindowOperator<IN, OUT, W extends Window>
 	}
 
 	@Override
-	public void restoreState(StreamTaskState taskState) throws Exception {
-		super.restoreState(taskState);
+	public void restoreState(StreamTaskState taskState, long recoveryTimestamp) throws Exception {
+		super.restoreState(taskState, recoveryTimestamp);
 
 
 		@SuppressWarnings("unchecked")
