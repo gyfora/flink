@@ -93,6 +93,8 @@ public abstract class AbstractStreamOperator<OUT>
 	private transient TypeSerializer<?> keySerializer;
 	
 	private transient HashMap<String, KvStateSnapshot<?, ?, ?>> keyValueStateSnapshots;
+
+	private long recoveryTimsetamp;
 	
 	// ------------------------------------------------------------------------
 	//  Life Cycle
@@ -172,10 +174,11 @@ public abstract class AbstractStreamOperator<OUT>
 	}
 	
 	@Override
-	public void restoreState(StreamTaskState state) throws Exception {
+	public void restoreState(StreamTaskState state, long recoceryTimestamp) throws Exception {
 		// restore the key/value state. the actual restore happens lazily, when the function requests
 		// the state again, because the restore method needs information provided by the user function
 		keyValueStateSnapshots = state.getKvStates();
+		this.recoveryTimsetamp = recoceryTimestamp;
 	}
 	
 	@Override
@@ -269,7 +272,7 @@ public abstract class AbstractStreamOperator<OUT>
 	 * @throws IllegalStateException Thrown, if the key/value state was already initialized.
 	 * @throws Exception Thrown, if the state backend cannot create the key/value state.
 	 */
-	@SuppressWarnings({"rawtypes", "unchecked"})
+	@SuppressWarnings("unchecked")
 	protected <K, V, Backend extends StateBackend<Backend>> OperatorState<V> createKeyValueState(
 			String name, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception
 	{
@@ -304,19 +307,17 @@ public abstract class AbstractStreamOperator<OUT>
 			throw new RuntimeException();
 		}
 		
-		@SuppressWarnings("unchecked")
 		Backend stateBackend = (Backend) container.getStateBackend();
 
 		KvState<K, V, Backend> kvstate = null;
 		
 		// check whether we restore the key/value state from a snapshot, or create a new blank one
 		if (keyValueStateSnapshots != null) {
-			@SuppressWarnings("unchecked")
 			KvStateSnapshot<K, V, Backend> snapshot = (KvStateSnapshot<K, V, Backend>) keyValueStateSnapshots.remove(name);
 
 			if (snapshot != null) {
 				kvstate = snapshot.restoreState(
-						stateBackend, keySerializer, valueSerializer, defaultValue, getUserCodeClassloader());
+						stateBackend, keySerializer, valueSerializer, defaultValue, getUserCodeClassloader(), recoveryTimsetamp);
 			}
 		}
 		
