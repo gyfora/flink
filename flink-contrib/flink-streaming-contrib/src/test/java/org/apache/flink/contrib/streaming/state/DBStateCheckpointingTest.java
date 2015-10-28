@@ -38,7 +38,6 @@ import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.hadoop.shaded.com.google.common.collect.Lists;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -50,6 +49,8 @@ import org.apache.flink.test.checkpointing.PartitionedStateCheckpointingITCase.N
 import org.apache.flink.test.checkpointing.StreamFaultToleranceTestBase;
 import org.junit.After;
 import org.junit.Before;
+
+import com.google.common.collect.Lists;
 
 @SuppressWarnings("serial")
 public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
