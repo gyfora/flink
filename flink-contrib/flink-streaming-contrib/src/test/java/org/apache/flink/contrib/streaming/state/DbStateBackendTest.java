@@ -257,7 +257,9 @@ public class DbStateBackendTest {
 		DbBackendConfig conf = DbStateBackendTest.conf.createConfigForShard(0);
 		conf.setKvCacheSize(3);
 		conf.setMaxKvInsertBatchSize(2);
-		conf.setMaxKvCacheEvictFraction(1);
+		
+		// We evict 2 elements when the cache is full
+		conf.setMaxKvCacheEvictFraction(0.6f);
 
 		DbStateBackend backend = new DbStateBackend(conf);
 
@@ -268,6 +270,7 @@ public class DbStateBackendTest {
 		LazyDbKvState<Integer, String> kv = backend.createKvState(1, "state1", IntSerializer.INSTANCE,
 				StringSerializer.INSTANCE, "a");
 		Map<Integer, Optional<String>> cache = kv.getStateCache();
+		Map<Integer, Optional<String>> modified = kv.getModified();
 
 		assertEquals(0, kv.size());
 
@@ -289,10 +292,19 @@ public class DbStateBackendTest {
 		kv.update("3");
 		assertEquals("3", kv.value());
 
+		assertTrue(modified.containsKey(1));
+		assertTrue(modified.containsKey(2));
+		assertTrue(modified.containsKey(3));
+
 		// 1,2 should be evicted as the cache filled
 		kv.setCurrentKey(4);
 		kv.update("4");
 		assertEquals("4", kv.value());
+
+		assertFalse(modified.containsKey(1));
+		assertFalse(modified.containsKey(2));
+		assertTrue(modified.containsKey(3));
+		assertTrue(modified.containsKey(4));
 
 		assertEquals(Optional.of("3"), cache.get(3));
 		assertEquals(Optional.of("4"), cache.get(4));
@@ -302,15 +314,24 @@ public class DbStateBackendTest {
 		// draw a snapshot
 		kv.shapshot(682375462378L, 100);
 
+		assertTrue(modified.isEmpty());
+
 		// make some more modifications
 		kv.setCurrentKey(2);
 		assertEquals("2", kv.value());
 		kv.update(null);
 
+		assertTrue(modified.containsKey(2));
+		assertEquals(1, modified.size());
+
 		assertEquals(Optional.of("3"), cache.get(3));
 		assertEquals(Optional.of("4"), cache.get(4));
 		assertEquals(Optional.absent(), cache.get(2));
 		assertFalse(cache.containsKey(1));
+
+		assertTrue(modified.containsKey(2));
+		assertTrue(modified.containsKey(3));
+		assertTrue(modified.containsKey(4));
 
 		// clear cache from initial keys
 
@@ -321,6 +342,10 @@ public class DbStateBackendTest {
 		kv.setCurrentKey(7);
 		kv.value();
 
+		assertFalse(modified.containsKey(5));
+		assertTrue(modified.containsKey(6));
+		assertTrue(modified.containsKey(7));
+
 		assertFalse(cache.containsKey(1));
 		assertFalse(cache.containsKey(2));
 		assertFalse(cache.containsKey(3));
@@ -329,13 +354,25 @@ public class DbStateBackendTest {
 		kv.setCurrentKey(2);
 		assertEquals("a", kv.value());
 
-		// draw another snapshot
-		KvStateSnapshot<Integer, String, DbStateBackend> snapshot2 = kv.shapshot(682375462379L, 200);
+		long checkpointTs = System.currentTimeMillis();
+
+		// Draw a snapshot that we will restore later
+		KvStateSnapshot<Integer, String, DbStateBackend> snapshot1 = kv.shapshot(682375462379L, checkpointTs);
+		assertTrue(modified.isEmpty());
+
+		// Do some updates then draw another snapshot (imitate a partial
+		// failure), these updates should not be visible if we restore snapshot1
+		kv.setCurrentKey(1);
+		kv.update("123");
+		kv.setCurrentKey(3);
+		kv.update("456");
+
+		kv.shapshot(682375462379L, checkpointTs + 10);
 
 		// restore the second snapshot and validate it (we set a new default
 		// value here to make sure that the default wasn't written)
-		KvState<Integer, String, DbStateBackend> restored = snapshot2.restoreState(backend, IntSerializer.INSTANCE,
-				StringSerializer.INSTANCE, "b", getClass().getClassLoader(), System.currentTimeMillis());
+		KvState<Integer, String, DbStateBackend> restored = snapshot1.restoreState(backend, IntSerializer.INSTANCE,
+				StringSerializer.INSTANCE, "b", getClass().getClassLoader(), checkpointTs + 100);
 
 		restored.setCurrentKey(1);
 		assertEquals("b", restored.value());

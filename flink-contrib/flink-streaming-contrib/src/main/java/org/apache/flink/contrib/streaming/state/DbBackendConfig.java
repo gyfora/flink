@@ -175,7 +175,7 @@ public class DbBackendConfig implements Serializable {
 	 * Set the maximum number of key-value pairs stored in one task instance's
 	 * cache before evicting to the underlying database. When the cache is full
 	 * the N least recently used keys will be evicted to the database, where N =
-	 * min(maxKvInsertBatchSize, maxKvEvictFraction*KvCacheSize)
+	 * maxKvEvictFraction*KvCacheSize.
 	 *
 	 */
 	public void setKvCacheSize(int size) {
@@ -223,7 +223,7 @@ public class DbBackendConfig implements Serializable {
 	 * 
 	 */
 	public int getNumElementsToEvict() {
-		return (int) Math.min(getMaxKvInsertBatchSize(), Math.ceil(getKvCacheSize() * getMaxKvCacheEvictFraction()));
+		return (int) Math.ceil(getKvCacheSize() * getMaxKvCacheEvictFraction());
 	}
 
 	/**

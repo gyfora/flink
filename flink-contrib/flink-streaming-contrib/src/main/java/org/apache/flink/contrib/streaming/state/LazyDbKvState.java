@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -141,13 +142,13 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	public DbKvStateSnapshot<K, V> shapshot(long checkpointId, long timestamp) throws IOException {
 
 		int rowsInBatchStatement = 0;
-		int sizeBeforeSnapshot = size();
 
 		// We write the cached entries to the database
-		for (Entry<K, Optional<V>> state : cache.entrySet()) {
+		for (Entry<K, Optional<V>> state : cache.modified.entrySet()) {
 			rowsInBatchStatement = batchInsert(checkpointId, timestamp, state.getKey(), state.getValue().orNull(),
 					rowsInBatchStatement);
 		}
+		cache.modified.clear();
 
 		// We signal the end of the batch to flush the remaining inserts
 		if (rowsInBatchStatement > 0) {
@@ -159,9 +160,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		lookupId = checkpointId;
 		lookupTs = timestamp;
 
-		if (LOG.isDebugEnabled()) {
-			LOG.debug("Snapshot taken for {} kv pairs.", sizeBeforeSnapshot);
-		}
 		return new DbKvStateSnapshot<K, V>(kvStateId, checkpointId, timestamp);
 	}
 
@@ -265,6 +263,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		return cache;
 	}
 
+	public Map<K, Optional<V>> getModified() {
+		return cache.modified;
+	}
+
 	/**
 	 * 
 	 * Snapshot that stores a specific lookup checkpoint id and timestamp, and
@@ -291,8 +293,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		@Override
 		public LazyDbKvState<K, V> restoreState(final DbStateBackend stateBackend,
 				final TypeSerializer<K> keySerializer,
-				final TypeSerializer<V> valueSerializer, 
-				final V defaultValue, 
+				final TypeSerializer<V> valueSerializer,
+				final V defaultValue,
 				ClassLoader classLoader,
 				final long recoveryTimestamp)
 						throws IOException {
@@ -330,10 +332,13 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	 * Keys not found in the cached will be retrieved from the underlying
 	 * database
 	 */
-	private class StateCache extends LinkedHashMap<K, Optional<V>> {
+	private final class StateCache extends LinkedHashMap<K, Optional<V>> {
 		private static final long serialVersionUID = 1L;
 		private final int cacheSize;
 		private final int evictionSize;
+
+		// We keep track the state modified since the last checkpoint
+		private final Map<K, Optional<V>> modified = new HashMap<>();
 
 		public StateCache(int cacheSize, int evictionSize) {
 			super(cacheSize, 0.75f, true);
@@ -344,9 +349,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		@Override
 		public Optional<V> put(K key, Optional<V> value) {
 			// Put kv pair in the cache and evict elements if the cache is full
-			Optional<V> out = super.put(key, value);
+			Optional<V> old = super.put(key, value);
+			modified.put(key, value);
 			evictIfFull();
-			return out;
+			return old;
 		}
 
 		@SuppressWarnings("unchecked")
@@ -358,7 +364,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 				value = Optional.fromNullable(getFromDatabaseOrNull((K) key));
 				put((K) key, value);
 			}
-
+			modified.put((K) key, value);
 			return value;
 		}
 
@@ -392,8 +398,9 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		}
 
 		/**
-		 * If the cache is full the evictionSize least recently accessed
-		 * elements will be removed from the cache.
+		 * If the cache is full the min(insertBatchSize, evictionSize) least
+		 * recently accessed elements will be removed from the cache and written
+		 * to the database if necessary.
 		 */
 		private void evictIfFull() {
 			if (size() > cacheSize) {
@@ -401,10 +408,15 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 					int numEvicted = 0;
 					int rowsInBatch = 0;
 					Iterator<Entry<K, Optional<V>>> entryIterator = entrySet().iterator();
-					while (numEvicted < evictionSize && entryIterator.hasNext()) {
+					while (numEvicted < evictionSize && rowsInBatch < maxInsertBatchSize && entryIterator.hasNext()) {
 						Entry<K, Optional<V>> next = entryIterator.next();
-						rowsInBatch = batchInsert(lookupId, lookupTs + 1, next.getKey(), next.getValue().orNull(),
-								numEvicted);
+
+						// We only need to write to the database if modified
+						if (modified.remove(next.getKey()) != null) {
+							rowsInBatch = batchInsert(lookupId, lookupTs + 1, next.getKey(), next.getValue().orNull(),
+									numEvicted);
+						}
+
 						entryIterator.remove();
 						numEvicted++;
 					}
