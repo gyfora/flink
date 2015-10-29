@@ -58,25 +58,24 @@ import static org.apache.flink.contrib.streaming.state.SQLRetrier.retry;
  */
 public class DbStateBackend extends StateBackend<DbStateBackend> {
 
+	private static final long serialVersionUID = 1L;
 	private static final Logger LOG = LoggerFactory.getLogger(DbStateBackend.class);
 
-	private static final long serialVersionUID = 1L;
+	private Random rnd;
 
 	// ------------------------------------------------------
 
 	private Environment env;
-	private Random rnd;
 
 	// ------------------------------------------------------
 
 	private final DbBackendConfig dbConfig;
 	private final DbAdapter dbAdapter;
 
-	private static final int NUM_RETRIES = 5;
-
+	private Connection con;
 	private int shardIndex = 0;
 
-	private Connection con;
+	private static final int NUM_RETRIES = 5;
 	private PreparedStatement insertStatement;
 
 	// ------------------------------------------------------
@@ -133,6 +132,8 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	public <S extends Serializable> StateHandle<S> checkpointStateSerializable(final S state, final long checkpointID,
 			final long timestamp) throws Exception {
 
+		// If we set a different backend for non-partitioned checkpoints we use
+		// that otherwise write to the database.
 		if (nonPartitionedStateBackend == null) {
 			return retry(new Callable<DbStateHandle<S>>() {
 				public DbStateHandle<S> call() throws Exception {
@@ -140,13 +141,13 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 					// store the checkpoint id and timestamp for bookkeeping
 					long handleId = rnd.nextLong();
 
-					dbAdapter.setCheckpointInsertParams(env.getJobID().toString(), insertStatement, checkpointID,
-							timestamp, handleId,
+					dbAdapter.setCheckpointInsertParams(env.getJobID().toString(), insertStatement,
+							checkpointID, timestamp, handleId,
 							InstantiationUtil.serializeObject(state));
 
 					insertStatement.executeUpdate();
 
-					return new DbStateHandle<S>(env.getJobID().toString(), checkpointID, handleId,
+					return new DbStateHandle<S>(env.getJobID().toString(), checkpointID, timestamp, handleId,
 							dbConfig.createConfigForShard(shardIndex));
 				}
 			}, NUM_RETRIES);
@@ -159,8 +160,8 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	public CheckpointStateOutputStream createCheckpointStateOutputStream(long checkpointID, long timestamp)
 			throws Exception {
 		if (nonPartitionedStateBackend == null) {
-			// We don't implement this functionality as we cannot directly write
-			// a stream to the database anyways.
+			// We don't implement this functionality for the DbStateBackend as
+			// we cannot directly write a stream to the database anyways.
 			throw new UnsupportedOperationException("Use ceckpointStateSerializable instead.");
 		} else {
 			return nonPartitionedStateBackend.createCheckpointStateOutputStream(checkpointID, timestamp);
@@ -170,9 +171,13 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	@Override
 	public <K, V> LazyDbKvState<K, V> createKvState(int operatorId, String stateName,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
-		return new LazyDbKvState<K, V>(env.getJobID() + "_" + operatorId + "_" + stateName,
-				getConnection(), getConfiguration(), keySerializer,
-				valueSerializer, defaultValue);
+		return new LazyDbKvState<K, V>(
+				env.getJobID() + "_" + operatorId + "_" + stateName,
+				getConnection(),
+				getConfiguration(),
+				keySerializer,
+				valueSerializer,
+				defaultValue);
 	}
 
 	@Override
@@ -187,7 +192,8 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 		con = dbConfig.createConnection(shardIndex);
 		// We want the most light-weight transaction isolation level as we don't
 		// have conflicting reads/writes. We just want to be able to roll back
-		// batch inserts for kv snapshots.
+		// batch inserts for k-v snapshots. This requirement might be removed in
+		// the future.
 		con.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
 
 		// If we have a different backend for non-partitioned states we
@@ -210,6 +216,8 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 
 	@Override
 	public void close() throws Exception {
+		// We first close the statement/non-partitioned backend, then we close
+		// the database connection
 		try (Connection c = con) {
 			if (nonPartitionedStateBackend == null) {
 				insertStatement.close();
@@ -225,7 +233,6 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 			dbAdapter.disposeAllStateForJob(env.getJobID().toString(), con);
 		} else {
 			nonPartitionedStateBackend.disposeAllStateForCurrentJob();
-
 		}
 	}
 }

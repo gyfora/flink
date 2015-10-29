@@ -30,36 +30,38 @@ import org.eclipse.jetty.util.log.Log;
 
 /**
  * State handle implementation for storing checkpoints as byte arrays in
- * databases.
+ * databases using the {@link DbAdapter} defined in the {@link DbBackendConfig}.
  * 
  */
 public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 
 	private static final long serialVersionUID = 1L;
-	private final long checkpointId;
-	private final long handleId;
+	private static final int NUM_RETRIES = 5;
 
 	private final String jobId;
-
 	private final DbBackendConfig dbConfig;
-	private DbAdapter adapter;
 
-	public DbStateHandle(String jobId, long checkpointId, long handleId, DbBackendConfig dbConfig) {
+	private final long checkpointId;
+	private final long checkpointTs;
+
+	private final long handleId;
+
+	public DbStateHandle(String jobId, long checkpointId, long checkpointTs, long handleId, DbBackendConfig dbConfig) {
 		this.checkpointId = checkpointId;
 		this.handleId = handleId;
 		this.jobId = jobId;
 		this.dbConfig = dbConfig;
-		this.adapter = dbConfig.getDbAdapter();
+		this.checkpointTs = checkpointTs;
 	}
 
 	protected byte[] getBytes() throws IOException {
 		return retry(new Callable<byte[]>() {
 			public byte[] call() throws Exception {
 				try (Connection con = dbConfig.createConnection()) {
-					return adapter.getCheckpoint(jobId, con, checkpointId, handleId);
+					return dbConfig.getDbAdapter().getCheckpoint(jobId, con, checkpointId, checkpointTs, handleId);
 				}
 			}
-		}, 5);
+		}, NUM_RETRIES);
 	}
 
 	@Override
@@ -68,13 +70,16 @@ public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 			retry(new Callable<Boolean>() {
 				public Boolean call() throws Exception {
 					try (Connection con = dbConfig.createConnection()) {
-						adapter.deleteCheckpoint(jobId, con, checkpointId, handleId);
+						dbConfig.getDbAdapter().deleteCheckpoint(jobId, con, checkpointId, checkpointTs, handleId);
 					}
 					return true;
 				}
-			}, 2);
+			}, NUM_RETRIES);
 		} catch (IOException e) {
-			Log.warn("Could not discard state.");
+			// We don't want to fail the job here, but log the error.
+			if (Log.isDebugEnabled()) {
+				Log.debug("Could not discard state.");
+			}
 		}
 	}
 

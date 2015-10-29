@@ -60,22 +60,22 @@ under the License.
 			<type>test-jar</type>
 			<scope>test</scope>
 		</dependency>
-    <dependency>
-      <groupId>com.google.guava</groupId>
-      <artifactId>guava</artifactId>
-      <version>${guava.version}</version>
-    </dependency>
+		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>${guava.version}</version>
+		</dependency>
 		<dependency>
 			<groupId>org.apache.derby</groupId>
 			<artifactId>derbyclient</artifactId>
 			<version>10.12.1.1</version>
-      <scope>test</scope>
+			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.apache.derby</groupId>
 			<artifactId>derbynet</artifactId>
 			<version>10.12.1.1</version>
-      <scope>test</scope>
+			<scope>test</scope>
 		</dependency>
 	</dependencies>
 

@@ -34,6 +34,7 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.util.InstantiationUtil;
+import org.eclipse.jetty.util.log.Log;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -69,9 +70,11 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	// Max number of key-value pairs inserted in one batch to the database
 	private final int maxInsertBatchSize;
 
+	// Database properties
 	private final Connection con;
 	private final DbAdapter dbAdapter;
 
+	// Statements for key-lookups and inserts as prepared by the dbAdapter
 	private PreparedStatement selectStatement;
 	private PreparedStatement insertStatement;
 
@@ -81,17 +84,26 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	private final StateCache cache;
 
 	// Checkpoint ID and timestamp of the last successful checkpoint for loading
-	// missing values to the cache
+	// missing values to the cache. The lookup timestamp may be incremented
+	// between snapshots as we evict modified values from the cache.
 	private long lookupId;
 	private long lookupTs;
 
 	// ------------------------------------------------------
 
+	/**
+	 * Constructor to initialize the {@link LazyDbKvState} the first time the
+	 * job starts.
+	 */
 	public LazyDbKvState(String kvStateId, Connection con, DbBackendConfig conf, TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
 		this(kvStateId, con, conf, keySerializer, valueSerializer, defaultValue, -1, -1);
 	}
 
+	/**
+	 * Initialize the {@link LazyDbKvState} from a snapshot given a lookup id
+	 * and timestamp.
+	 */
 	public LazyDbKvState(String kvStateId, Connection con, final DbBackendConfig conf, TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer, V defaultValue, long lookupId, long lookupTs) throws IOException {
 
@@ -101,15 +113,20 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		this.valueSerializer = valueSerializer;
 		this.defaultValue = defaultValue;
 
-		this.lookupId = lookupId;
-		this.lookupTs = lookupTs;
-
-		this.cache = new StateCache(conf.getKvCacheSize(), conf.getNumElementsToEvict());
 		this.maxInsertBatchSize = conf.getMaxKvInsertBatchSize();
 		this.con = con;
 		this.dbAdapter = conf.getDbAdapter();
 
+		this.lookupId = lookupId;
+		this.lookupTs = lookupTs;
+
+		this.cache = new StateCache(conf.getKvCacheSize(), conf.getNumElementsToEvict());
+
 		initDB(this.con);
+
+		if (LOG.isDebugEnabled()) {
+			LOG.debug("Lazy database kv-state ({}) successfully initialized", kvStateId);
+		}
 	}
 
 	@Override
@@ -122,6 +139,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		try {
 			cache.put(currentKey, Optional.fromNullable(value));
 		} catch (RuntimeException e) {
+			// We need to catch the RuntimeExceptions thrown in the StateCache
+			// methods here
 			throw new IOException(e);
 		}
 	}
@@ -129,11 +148,14 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	@Override
 	public V value() throws IOException {
 		try {
-			// We get the value from the cache (or load from the database). If
-			// null, we return a copy of the default value
+			// We get the value from the cache (which will automatically load it
+			// from the database if necessary). If null, we return a copy of the
+			// default value
 			V val = cache.get(currentKey).orNull();
 			return val != null ? val : copyDefault();
 		} catch (RuntimeException e) {
+			// We need to catch the RuntimeExceptions thrown in the StateCache
+			// methods here
 			throw new IOException(e);
 		}
 	}
@@ -141,11 +163,17 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	@Override
 	public DbKvStateSnapshot<K, V> shapshot(long checkpointId, long timestamp) throws IOException {
 
+		// We need to keep track of this to know when to execute the insert
 		int rowsInBatchStatement = 0;
 
-		// We write the cached entries to the database
+		// We insert the cached and modified entries to the database then clear
+		// the map of modified entries
 		for (Entry<K, Optional<V>> state : cache.modified.entrySet()) {
-			rowsInBatchStatement = batchInsert(checkpointId, timestamp, state.getKey(), state.getValue().orNull(),
+			rowsInBatchStatement = batchInsert(
+					checkpointId,
+					timestamp,
+					state.getKey(),
+					state.getValue().orNull(),
 					rowsInBatchStatement);
 		}
 		cache.modified.clear();
@@ -156,7 +184,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		}
 
 		// Update the lookup id and timestamp so future cache loads will return
-		// the checkpointed values
+		// the last written values
 		lookupId = checkpointId;
 		lookupTs = timestamp;
 
@@ -164,9 +192,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	}
 
 	/**
-	 * Returns the number of elements currently stored in the task (cache + cold
-	 * states). Note that the number of elements in the database is not counted
-	 * here.
+	 * Returns the number of elements currently stored in the task's cache. Note
+	 * that the number of elements in the database is not counted here.
 	 */
 	@Override
 	public int size() {
@@ -187,66 +214,81 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	 */
 	private void initDB(final Connection con) throws IOException {
 
-		retry(new Callable<Boolean>() {
-			public Boolean call() throws Exception {
+		retry(new Callable<Void>() {
+			public Void call() throws Exception {
 
 				dbAdapter.createKVStateTable(kvStateId, con);
 
 				insertStatement = dbAdapter.prepareKVCheckpointInsert(kvStateId, con);
 				selectStatement = dbAdapter.prepareKeyLookup(kvStateId, con);
 
-				return true;
+				return null;
 			}
 
 		}, NUM_RETRIES);
-
-		if (LOG.isDebugEnabled()) {
-			LOG.debug("Lazy database kv-state ({}) successfully initialized", kvStateId);
-		}
 	}
 
 	/**
 	 * This method inserts checkpoint entries into the database by batching them
 	 * up and executing a batchUpdate if it fills up. We can additionally
 	 * "flush" the batch contents passing null as key.
+	 * 
+	 * @return The current number of inserts in the batch statement
 	 */
 	private int batchInsert(final long checkpointId, final long timestamp, final K key, final V value,
-			final int batchCount)
-					throws IOException {
+			final int batchCount) throws IOException {
 
 		return retry(new Callable<Integer>() {
 			public Integer call() throws Exception {
 				if (key != null) {
-					dbAdapter.setKVCheckpointInsertParams(kvStateId, insertStatement, checkpointId, timestamp,
+					// We set the insert statement parameters then add it to the
+					// current batch of inserts
+					dbAdapter.setKVCheckpointInsertParams(
+							kvStateId,
+							insertStatement,
+							checkpointId,
+							timestamp,
 							InstantiationUtil.serializeToByteArray(keySerializer, key),
 							value != null ? InstantiationUtil.serializeToByteArray(valueSerializer, value) : null);
 					insertStatement.addBatch();
 				}
 
-				if (batchCount + 1 == maxInsertBatchSize || key == null) {
+				// If the batch is full we execute it
+				if (batchCount + 1 >= maxInsertBatchSize || key == null) {
 					// Since we cannot reinsert the same values after a
-					// failure during the batch insert we need to make
+					// failure during the batch insert, we need to make
 					// it one transaction
 					con.setAutoCommit(false);
 					insertStatement.executeBatch();
 					con.commit();
+
+					// If the commit was successful we clear the batch an turn
+					// autocommit back for the connection so lookups don't need
+					// to commit
 					insertStatement.clearBatch();
 					con.setAutoCommit(true);
+					if (Log.isDebugEnabled()) {
+						Log.debug("Written {} records to the database for state {}.", batchCount, kvStateId);
+					}
 					return 0;
 				} else {
 					return batchCount + 1;
 				}
 			}
-		}, new Callable<Boolean>() {
-			public Boolean call() throws Exception {
+		}, new Callable<Void>() {
+			// When the retrier get's an exception during the batch insert it
+			// should roll back the transaction before trying it again
+			public Void call() throws Exception {
 				con.rollback();
-				return true;
+				return null;
 			}
 		}, NUM_RETRIES);
 	}
 
 	@Override
 	public void dispose() {
+		// We are only closing the statements here, the connection is borrowed
+		// from the state backend and will be closed there.
 		try {
 			selectStatement.close();
 		} catch (SQLException e) {
@@ -259,10 +301,19 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		}
 	}
 
+	/**
+	 * Return the Map of cached states.
+	 * 
+	 */
 	public Map<K, Optional<V>> getStateCache() {
 		return cache;
 	}
 
+	/**
+	 * Return the Map of modified states that hasn't been written to the
+	 * database yet.
+	 * 
+	 */
 	public Map<K, Optional<V>> getModified() {
 		return cache.modified;
 	}
@@ -280,7 +331,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		private static final long serialVersionUID = 1L;
 
 		private final String kvStateId;
-
 		private final long lookupId;
 		private final long lookupTs;
 
@@ -292,29 +342,45 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 
 		@Override
 		public LazyDbKvState<K, V> restoreState(final DbStateBackend stateBackend,
-				final TypeSerializer<K> keySerializer,
-				final TypeSerializer<V> valueSerializer,
-				final V defaultValue,
-				ClassLoader classLoader,
-				final long recoveryTimestamp)
-						throws IOException {
+				final TypeSerializer<K> keySerializer, final TypeSerializer<V> valueSerializer,
+				final V defaultValue, ClassLoader classLoader, final long recoveryTimestamp) throws IOException {
 
-			return retry(new Callable<LazyDbKvState<K, V>>() {
-				public LazyDbKvState<K, V> call() throws Exception {
+			// First we clean up the states written by partially failed
+			// snapshots (if any)
+			retry(new Callable<Void>() {
+				// The cleanup will be performed multiple times (by all the
+				// subtasks) but this should not cause any problems as we
+				// are cleaning up based on the recovery timestamp.
+				public Void call() throws Exception {
+					stateBackend
+							.getConfiguration()
+							.getDbAdapter()
+							.cleanupFailedCheckpoints(
+									kvStateId,
+									stateBackend.getConnection(),
+									lookupId,
+									recoveryTimestamp);
 
-					stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(kvStateId,
-							stateBackend.getConnection(),
-							lookupId, recoveryTimestamp);
-
-					if (LOG.isDebugEnabled()) {
-						LOG.debug("KV state({},{}) restored.", lookupId, lookupTs);
-					}
-					return new LazyDbKvState<K, V>(kvStateId, stateBackend.getConnection(),
-							stateBackend.getConfiguration(), keySerializer, valueSerializer,
-							defaultValue, lookupId, lookupTs);
+					return null;
 				}
-
 			}, NUM_RETRIES);
+
+			// Restore the KvState
+			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(
+					kvStateId,
+					stateBackend.getConnection(),
+					stateBackend.getConfiguration(),
+					keySerializer,
+					valueSerializer,
+					defaultValue,
+					lookupId,
+					lookupTs);
+
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("KV state({},{}) restored.", lookupId, lookupTs);
+			}
+
+			return restored;
 		}
 
 		@Override
@@ -334,6 +400,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	 */
 	private final class StateCache extends LinkedHashMap<K, Optional<V>> {
 		private static final long serialVersionUID = 1L;
+
 		private final int cacheSize;
 		private final int evictionSize;
 
@@ -358,19 +425,23 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		@SuppressWarnings("unchecked")
 		@Override
 		public Optional<V> get(Object key) {
+			// First we check whether the value is cached
 			Optional<V> value = super.get(key);
 			if (value == null) {
-				// Load into cache from database if exists
+				// If it doesn't try to load it from the database
 				value = Optional.fromNullable(getFromDatabaseOrNull((K) key));
 				put((K) key, value);
 			}
+			// We currently mark elements that were retreived also as modified
+			// in case the user applies some mutation without update.
 			modified.put((K) key, value);
 			return value;
 		}
 
 		@Override
 		protected boolean removeEldestEntry(Entry<K, Optional<V>> eldest) {
-			// We remove manually
+			// We need to remove elements manually if the cache becomes full, so
+			// we always return false here.
 			return false;
 		}
 
@@ -385,6 +456,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 			try {
 				return retry(new Callable<V>() {
 					public V call() throws Exception {
+						// We lookup using the adapter and serialize/deserialize
+						// with the TypeSerializers
 						byte[] serializedVal = dbAdapter.lookupKey(kvStateId, selectStatement,
 								InstantiationUtil.serializeToByteArray(keySerializer, key), lookupId, lookupTs);
 
@@ -393,38 +466,68 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 					}
 				}, NUM_RETRIES);
 			} catch (IOException e) {
+				// We need to re-throw this exception to conform to the map
+				// interface, we will catch this when we call the the put/get
 				throw new RuntimeException(e);
 			}
 		}
 
 		/**
-		 * If the cache is full the min(insertBatchSize, evictionSize) least
-		 * recently accessed elements will be removed from the cache and written
-		 * to the database if necessary.
+		 * If the cache is full we remove the evictionSize least recently
+		 * accessed elements and write them to the database if they were
+		 * modified since the last checkpoint.
 		 */
 		private void evictIfFull() {
 			if (size() > cacheSize) {
+				if (LOG.isDebugEnabled()) {
+					LOG.debug("State cache is full for {}, evicting {} elements.", kvStateId, evictionSize);
+				}
 				try {
 					int numEvicted = 0;
 					int rowsInBatch = 0;
+					boolean writtenToDb = false;
+
 					Iterator<Entry<K, Optional<V>>> entryIterator = entrySet().iterator();
-					while (numEvicted < evictionSize && rowsInBatch < maxInsertBatchSize && entryIterator.hasNext()) {
+					while (numEvicted++ < evictionSize && entryIterator.hasNext()) {
+
 						Entry<K, Optional<V>> next = entryIterator.next();
 
 						// We only need to write to the database if modified
 						if (modified.remove(next.getKey()) != null) {
-							rowsInBatch = batchInsert(lookupId, lookupTs + 1, next.getKey(), next.getValue().orNull(),
+							// We insert elements with the last checkpoint id
+							// but an incremented timestamp to ensure good
+							// lookups. This won't interfere with the actual
+							// checkpoint timestamps.
+							rowsInBatch = batchInsert(
+									lookupId,
+									lookupTs + 1,
+									next.getKey(),
+									next.getValue().orNull(),
 									numEvicted);
+							if (rowsInBatch == 0) {
+								writtenToDb = true;
+							}
 						}
 
 						entryIterator.remove();
-						numEvicted++;
 					}
+					// Flush batch if has rows
 					if (rowsInBatch > 0) {
 						batchInsert(0, 0, null, null, 0);
+						writtenToDb = true;
 					}
-					lookupTs = lookupTs + 1;
+
+					// If we have written new values to the database we need to
+					// increment our lookup timestamp so we will read them back
+					// next time they are requested
+					if (writtenToDb) {
+						lookupTs = lookupTs + 1;
+					}
+
 				} catch (IOException e) {
+					// We need to re-throw this exception to conform to the map
+					// interface, we will catch this when we call the the
+					// put/get
 					throw new RuntimeException(e);
 				}
 			}

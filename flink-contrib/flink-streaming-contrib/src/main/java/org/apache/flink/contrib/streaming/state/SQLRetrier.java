@@ -83,7 +83,7 @@ public final class SQLRetrier implements Serializable {
 	 *            The callable to be retried.
 	 * @param onException
 	 *            The callable to be executed when an {@link SQLException} was
-	 *            encountered.
+	 *            encountered. Exceptions thrown during this call are ignored.
 	 * @param numRetries
 	 *            Max number of retries before throwing an {@link IOException}.
 	 * @return The result of the {@link Callable#call()}.

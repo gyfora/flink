@@ -73,10 +73,13 @@ public class DbStateBackendTest {
 
 	@AfterClass
 	public static void stopDerbyServer() throws Exception {
-		server.shutdown();
-		FileUtils.deleteDirectory(new File(tempDir.getAbsolutePath() + "/flinkDB1"));
-		FileUtils.deleteDirectory(new File(tempDir.getAbsolutePath() + "/flinkDB2"));
-		FileUtils.forceDelete(new File("derby.log"));
+		try {
+			server.shutdown();
+			FileUtils.deleteDirectory(new File(tempDir.getAbsolutePath() + "/flinkDB1"));
+			FileUtils.deleteDirectory(new File(tempDir.getAbsolutePath() + "/flinkDB2"));
+			FileUtils.forceDelete(new File("derby.log"));
+		} catch (Exception ignore) {
+		}
 	}
 
 	@Test
@@ -257,7 +260,7 @@ public class DbStateBackendTest {
 		DbBackendConfig conf = DbStateBackendTest.conf.createConfigForShard(0);
 		conf.setKvCacheSize(3);
 		conf.setMaxKvInsertBatchSize(2);
-		
+
 		// We evict 2 elements when the cache is full
 		conf.setMaxKvCacheEvictFraction(0.6f);
 
