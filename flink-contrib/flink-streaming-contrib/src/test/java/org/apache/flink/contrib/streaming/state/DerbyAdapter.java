@@ -45,7 +45,7 @@ public class DerbyAdapter extends DbAdapter {
 							+ "checkpointId bigint, "
 							+ "timestamp bigint, "
 							+ "handleId bigint,"
-							+ "serializedData blob,"
+							+ "checkpoint blob,"
 							+ "PRIMARY KEY (handleId)"
 							+ ")");
 		} catch (SQLException se) {

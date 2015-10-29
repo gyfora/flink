@@ -35,19 +35,18 @@ public class DbBackendConfig implements Serializable {
 
 	private static final long serialVersionUID = 1L;
 
+	// Database connection properties
 	private final String userName;
 	private final String userPassword;
-
 	private final List<String> shardUrls;
 
+	// JDBC Driver + DbAdapter information
+	private Class<? extends DbAdapter> dbAdapterClass = DbAdapter.class;
 	private String JDBCDriver = null;
 
-	private Class<? extends DbAdapter> dbAdapterClass = DbAdapter.class;
-
+	// KvState properties
 	private int kvStateCacheSize = 10000;
-
 	private int maxKvInsertBatchSize = 1000;
-
 	private float maxKvEvictFraction = 0.1f;
 
 	/**
@@ -87,26 +86,48 @@ public class DbBackendConfig implements Serializable {
 		this(dbUserName, dbUserPassword, Lists.newArrayList(dbUrl));
 	}
 
+	/**
+	 * The username used to connect to the database at the given urls.
+	 */
 	public String getUserName() {
 		return userName;
 	}
 
+	/**
+	 * The password used to connect to the database at the given url and
+	 * username.
+	 */
 	public String getUserPassword() {
 		return userPassword;
 	}
 
+	/**
+	 * Number of database shards defined.
+	 */
 	public int getNumberOfShards() {
 		return shardUrls.size();
 	}
 
+	/**
+	 * Database shard urls as provided in the constructor.
+	 * 
+	 */
 	public List<String> getShardUrls() {
 		return shardUrls;
 	}
 
+	/**
+	 * The url of the first shard.
+	 * 
+	 */
 	public String getUrl() {
 		return getShardUrl(0);
 	}
 
+	/**
+	 * The url of a specific shard.
+	 * 
+	 */
 	public String getShardUrl(int shardIndex) {
 		validateShardIndex(shardIndex);
 		return shardUrls.get(shardIndex);
@@ -284,6 +305,7 @@ public class DbBackendConfig implements Serializable {
 		result = prime * result + ((JDBCDriver == null) ? 0 : JDBCDriver.hashCode());
 		result = prime * result + ((dbAdapterClass == null) ? 0 : dbAdapterClass.hashCode());
 		result = prime * result + kvStateCacheSize;
+		result = prime * result + Float.floatToIntBits(maxKvEvictFraction);
 		result = prime * result + maxKvInsertBatchSize;
 		result = prime * result + ((shardUrls == null) ? 0 : shardUrls.hashCode());
 		result = prime * result + ((userName == null) ? 0 : userName.hashCode());
@@ -318,6 +340,9 @@ public class DbBackendConfig implements Serializable {
 			return false;
 		}
 		if (kvStateCacheSize != other.kvStateCacheSize) {
+			return false;
+		}
+		if (Float.floatToIntBits(maxKvEvictFraction) != Float.floatToIntBits(other.maxKvEvictFraction)) {
 			return false;
 		}
 		if (maxKvInsertBatchSize != other.maxKvInsertBatchSize) {
