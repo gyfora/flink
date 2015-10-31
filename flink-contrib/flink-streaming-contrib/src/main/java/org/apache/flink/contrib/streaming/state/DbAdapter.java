@@ -185,12 +185,10 @@ public class DbAdapter implements Serializable {
 			smt.executeUpdate(
 					"CREATE TABLE IF NOT EXISTS kvstate_" + stateId
 							+ " ("
-							+ "checkpointId bigint, "
 							+ "timestamp bigint, "
 							+ "k varbinary(256), "
 							+ "v blob, "
-							+ "PRIMARY KEY (k, checkpointId, timestamp), "
-							+ "KEY cleanup (checkpointId, timestamp)"
+							+ "PRIMARY KEY (k, timestamp) "
 							+ ")");
 		}
 	}
@@ -203,7 +201,7 @@ public class DbAdapter implements Serializable {
 	public PreparedStatement prepareKVCheckpointInsert(String stateId, Connection con) throws SQLException {
 		validateStateId(stateId);
 		return con.prepareStatement(
-				"INSERT INTO kvstate_" + stateId + " (checkpointId, timestamp, k, v) VALUES (?,?,?,?)");
+				"INSERT INTO kvstate_" + stateId + " (timestamp, k, v) VALUES (?,?,?)");
 	}
 
 	/**
@@ -215,22 +213,19 @@ public class DbAdapter implements Serializable {
 	 * @param insertStatement
 	 *            Statement prepared in
 	 *            {@link #prepareKVCheckpointInsert(String, Connection)}
-	 * @param checkpointId
 	 * @param timestamp
 	 * @param key
 	 * @param value
 	 * @throws SQLException
 	 */
-	public void setKVCheckpointInsertParams(String stateId, PreparedStatement insertStatement, long checkpointId,
-			long timestamp,
+	public void setKVCheckpointInsertParams(String stateId, PreparedStatement insertStatement, long timestamp,
 			byte[] key, byte[] value) throws SQLException {
-		insertStatement.setLong(1, checkpointId);
-		insertStatement.setLong(2, timestamp);
-		insertStatement.setBytes(3, key);
+		insertStatement.setLong(1, timestamp);
+		insertStatement.setBytes(2, key);
 		if (value != null) {
-			insertStatement.setBytes(4, value);
+			insertStatement.setBytes(3, value);
 		} else {
-			insertStatement.setNull(4, Types.BLOB);
+			insertStatement.setNull(3, Types.BLOB);
 		}
 	}
 
@@ -244,34 +239,30 @@ public class DbAdapter implements Serializable {
 		return con.prepareStatement("SELECT v"
 				+ " FROM kvstate_" + stateId
 				+ " WHERE k = ?"
-				+ " AND checkpointId <= ?"
 				+ " AND timestamp <= ?"
-				+ " ORDER BY checkpointId DESC LIMIT 1");
+				+ " ORDER BY timestamp DESC LIMIT 1");
 	}
 
 	/**
-	 * Retrieve the latest value from the database for a given key that has
-	 * checkpointId <= lookupId and checkpointTs <= lookupTs.
-	 * 
-	 * @param stateId
-	 *            Unique identifier of the kvstate (usually the table name).
-	 * @param lookupStatement
-	 *            The statement returned by
-	 *            {@link #prepareKeyLookup(String, Connection)}.
-	 * @param key
-	 *            The key to lookup.
-	 * @param lookupId
-	 *            Latest checkpoint id to select.
-	 * @param lookupTs
-	 *            Latest checkpoint ts to select.
-	 * @return The latest valid value for the key.
-	 * @throws SQLException
-	 */
-	public byte[] lookupKey(String stateId, PreparedStatement lookupStatement, byte[] key, long lookupId,
-			long lookupTs) throws SQLException {
+     * Retrieve the latest value from the database for a given key and
+     * timestamp.
+     * 
+     * @param stateId
+     *            Unique identifier of the kvstate (usually the table name).
+     * @param lookupStatement
+     *            The statement returned by
+     *            {@link #prepareKeyLookup(String, Connection)}.
+     * @param key
+     *            The key to lookup.
+     * @param lookupTimestamp
+     *            Latest timestamp we want to retrieve
+     * @return The latest valid value for the key.
+     * @throws SQLException
+     */
+	public byte[] lookupKey(String stateId, PreparedStatement lookupStatement, byte[] key, long lookupTimestamp)
+			throws SQLException {
 		lookupStatement.setBytes(1, key);
-		lookupStatement.setLong(2, lookupId);
-		lookupStatement.setLong(3, lookupTs);
+		lookupStatement.setLong(2, lookupTimestamp);
 
 		ResultSet res = lookupStatement.executeQuery();
 
@@ -283,18 +274,17 @@ public class DbAdapter implements Serializable {
 	}
 
 	/**
-	 * Remove partially failed snapshots using the latest id and a global
-	 * recovery timestamp. All records with a higher id but lower timestamp
-	 * should be deleted from the database.
+	 * Remove failed states by removing everything with timestamp between the
+	 * checkpoint and recovery times.
 	 * 
 	 */
-	public void cleanupFailedCheckpoints(String stateId, Connection con, long checkpointId, long reoveryTs)
-			throws SQLException {
+	public void cleanupFailedCheckpoints(String stateId, Connection con, long checkpointTimestamp,
+			long recoveryTimestamp) throws SQLException {
 		validateStateId(stateId);
 		try (Statement smt = con.createStatement()) {
 			smt.executeUpdate("DELETE FROM kvstate_" + stateId
-					+ " WHERE checkpointId > " + checkpointId
-					+ " AND timestamp < " + reoveryTs);
+					+ " WHERE timestamp > " + checkpointTimestamp 
+					+ " AND timestamp < " + recoveryTimestamp);
 		}
 	}
 
