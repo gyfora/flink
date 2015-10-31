@@ -369,8 +369,13 @@ public class DbStateBackendTest {
 		kv.update("123");
 		kv.setCurrentKey(3);
 		kv.update("456");
+		kv.setCurrentKey(2);
+		kv.update("2");
+		kv.setCurrentKey(4);
+		kv.update("4");
+		kv.update("5");
 
-		kv.shapshot(682375462379L, checkpointTs + 10);
+		kv.shapshot(6823754623710L, checkpointTs + 10);
 
 		// restore the second snapshot and validate it (we set a new default
 		// value here to make sure that the default wasn't written)

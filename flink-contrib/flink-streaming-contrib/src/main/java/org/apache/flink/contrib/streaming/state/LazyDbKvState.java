@@ -43,9 +43,7 @@ import com.google.common.base.Optional;
 /**
  * 
  * Lazily fetched {@link KvState} using a SQL backend. Key-value pairs are
- * cached on heap and are lazily retrieved on access. Key's that are dropped
- * from the cache will remain on heap until they are evicted to the backend upon
- * the next successful checkpoint.
+ * cached on heap and are lazily retrieved on access.
  * 
  */
 public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
@@ -83,11 +81,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	// LRU cache for the key-value states backed by the database
 	private final StateCache cache;
 
-	// Checkpoint ID and timestamp of the last successful checkpoint for loading
-	// missing values to the cache. The lookup timestamp may be incremented
-	// between snapshots as we evict modified values from the cache.
-	private long lookupId;
-	private long lookupTs;
+	// Timestamp of the last written state
+	private long lastTimestamp;
 
 	// ------------------------------------------------------
 
@@ -97,15 +92,14 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	 */
 	public LazyDbKvState(String kvStateId, Connection con, DbBackendConfig conf, TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
-		this(kvStateId, con, conf, keySerializer, valueSerializer, defaultValue, -1, -1);
+		this(kvStateId, con, conf, keySerializer, valueSerializer, defaultValue, -1);
 	}
 
 	/**
-	 * Initialize the {@link LazyDbKvState} from a snapshot given a lookup id
-	 * and timestamp.
+	 * Initialize the {@link LazyDbKvState} from a snapshot.
 	 */
 	public LazyDbKvState(String kvStateId, Connection con, final DbBackendConfig conf, TypeSerializer<K> keySerializer,
-			TypeSerializer<V> valueSerializer, V defaultValue, long lookupId, long lookupTs) throws IOException {
+			TypeSerializer<V> valueSerializer, V defaultValue, long lookupTs) throws IOException {
 
 		this.kvStateId = kvStateId;
 
@@ -117,8 +111,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		this.con = con;
 		this.dbAdapter = conf.getDbAdapter();
 
-		this.lookupId = lookupId;
-		this.lookupTs = lookupTs;
+		this.lastTimestamp = lookupTs;
 
 		this.cache = new StateCache(conf.getKvCacheSize(), conf.getNumElementsToEvict());
 
@@ -163,32 +156,31 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	@Override
 	public DbKvStateSnapshot<K, V> shapshot(long checkpointId, long timestamp) throws IOException {
 
+		if (timestamp < lastTimestamp) {
+			// This would violate our timing assumptions and break key lookups
+			throw new RuntimeException("Checkpoint has lower timestamp than the last written timestamp.");
+		}
+
 		// We need to keep track of this to know when to execute the insert
 		int rowsInBatchStatement = 0;
 
 		// We insert the cached and modified entries to the database then clear
 		// the map of modified entries
 		for (Entry<K, Optional<V>> state : cache.modified.entrySet()) {
-			rowsInBatchStatement = batchInsert(
-					checkpointId,
-					timestamp,
-					state.getKey(),
-					state.getValue().orNull(),
+			rowsInBatchStatement = batchInsert(timestamp, state.getKey(), state.getValue().orNull(),
 					rowsInBatchStatement);
 		}
 		cache.modified.clear();
 
 		// We signal the end of the batch to flush the remaining inserts
 		if (rowsInBatchStatement > 0) {
-			batchInsert(0, 0, null, null, 0);
+			batchInsert(0, null, null, 0);
 		}
 
-		// Update the lookup id and timestamp so future cache loads will return
-		// the last written values
-		lookupId = checkpointId;
-		lookupTs = timestamp;
+		// Update the last timestamp
+		lastTimestamp = timestamp;
 
-		return new DbKvStateSnapshot<K, V>(kvStateId, checkpointId, timestamp);
+		return new DbKvStateSnapshot<K, V>(kvStateId, timestamp);
 	}
 
 	/**
@@ -235,19 +227,14 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	 * 
 	 * @return The current number of inserts in the batch statement
 	 */
-	private int batchInsert(final long checkpointId, final long timestamp, final K key, final V value,
-			final int batchCount) throws IOException {
+	private int batchInsert(final long timestamp, final K key, final V value, final int batchCount) throws IOException {
 
 		return retry(new Callable<Integer>() {
 			public Integer call() throws Exception {
 				if (key != null) {
 					// We set the insert statement parameters then add it to the
 					// current batch of inserts
-					dbAdapter.setKVCheckpointInsertParams(
-							kvStateId,
-							insertStatement,
-							checkpointId,
-							timestamp,
+					dbAdapter.setKVCheckpointInsertParams(kvStateId, insertStatement, timestamp,
 							InstantiationUtil.serializeToByteArray(keySerializer, key),
 							value != null ? InstantiationUtil.serializeToByteArray(valueSerializer, value) : null);
 					insertStatement.addBatch();
@@ -319,11 +306,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	}
 
 	/**
-	 * 
-	 * Snapshot that stores a specific lookup checkpoint id and timestamp, and
+	 * Snapshot that stores a specific checkpoint timestamp and state id, and
 	 * also rolls back the database to that point upon restore. The rollback is
-	 * done by removing all state checkpoints that have larger id than the
-	 * lookup id and smaller timestamp than the recovery timestamp.
+	 * done by removing all state checkpoints that have timestamps between the
+	 * checkpoint and recovery timestamp.
 	 *
 	 */
 	private static class DbKvStateSnapshot<K, V> implements KvStateSnapshot<K, V, DbStateBackend> {
@@ -331,19 +317,22 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		private static final long serialVersionUID = 1L;
 
 		private final String kvStateId;
-		private final long lookupId;
-		private final long lookupTs;
+		private final long checkpointTimestamp;
 
-		public DbKvStateSnapshot(String kvStateId, long lookupId, long lookupTs) {
-			this.lookupId = lookupId;
-			this.lookupTs = lookupTs;
+		public DbKvStateSnapshot(String kvStateId, long checkpointTimestamp) {
+			this.checkpointTimestamp = checkpointTimestamp;
 			this.kvStateId = kvStateId;
 		}
 
 		@Override
 		public LazyDbKvState<K, V> restoreState(final DbStateBackend stateBackend,
-				final TypeSerializer<K> keySerializer, final TypeSerializer<V> valueSerializer,
-				final V defaultValue, ClassLoader classLoader, final long recoveryTimestamp) throws IOException {
+				final TypeSerializer<K> keySerializer, final TypeSerializer<V> valueSerializer, final V defaultValue,
+				ClassLoader classLoader, final long recoveryTimestamp) throws IOException {
+
+			// Validate our timing assumptions
+			if (recoveryTimestamp < checkpointTimestamp) {
+				throw new RuntimeException("Recovery timestamp must be greater than the last checkpoint timestamp");
+			}
 
 			// First we clean up the states written by partially failed
 			// snapshots (if any)
@@ -352,32 +341,19 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 				// subtasks) but this should not cause any problems as we
 				// are cleaning up based on the recovery timestamp.
 				public Void call() throws Exception {
-					stateBackend
-							.getConfiguration()
-							.getDbAdapter()
-							.cleanupFailedCheckpoints(
-									kvStateId,
-									stateBackend.getConnection(),
-									lookupId,
-									recoveryTimestamp);
+					stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(kvStateId,
+							stateBackend.getConnection(), checkpointTimestamp, recoveryTimestamp);
 
 					return null;
 				}
 			}, NUM_RETRIES);
 
 			// Restore the KvState
-			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(
-					kvStateId,
-					stateBackend.getConnection(),
-					stateBackend.getConfiguration(),
-					keySerializer,
-					valueSerializer,
-					defaultValue,
-					lookupId,
-					lookupTs);
+			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, stateBackend.getConnection(),
+					stateBackend.getConfiguration(), keySerializer, valueSerializer, defaultValue, checkpointTimestamp);
 
 			if (LOG.isDebugEnabled()) {
-				LOG.debug("KV state({},{}) restored.", lookupId, lookupTs);
+				LOG.debug("KV state({},{}) restored.", kvStateId, checkpointTimestamp);
 			}
 
 			return restored;
@@ -449,8 +425,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		 * Fetch the current value from the database if exists or return null.
 		 * 
 		 * @param key
-		 * @return The value corresponding to the lookupId and lookupTs from the
-		 *         database if exists or null.
+		 * @return The value corresponding to the key and the last timestamp
+		 *         from the database if exists or null.
 		 */
 		private V getFromDatabaseOrNull(final K key) {
 			try {
@@ -459,7 +435,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 						// We lookup using the adapter and serialize/deserialize
 						// with the TypeSerializers
 						byte[] serializedVal = dbAdapter.lookupKey(kvStateId, selectStatement,
-								InstantiationUtil.serializeToByteArray(keySerializer, key), lookupId, lookupTs);
+								InstantiationUtil.serializeToByteArray(keySerializer, key), lastTimestamp);
 
 						return serializedVal != null
 								? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
@@ -494,15 +470,11 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 
 						// We only need to write to the database if modified
 						if (modified.remove(next.getKey()) != null) {
-							// We insert elements with the last checkpoint id
-							// but an incremented timestamp to ensure good
-							// lookups. This won't interfere with the actual
-							// checkpoint timestamps.
-							rowsInBatch = batchInsert(
-									lookupId,
-									lookupTs + 1,
-									next.getKey(),
-									next.getValue().orNull(),
+							// We insert elements with timestamp + 1 to ensure
+							// good lookups. This won't interfere with the
+							// actual checkpoint timestamps as the next one
+							// should be much higher.
+							rowsInBatch = batchInsert(lastTimestamp + 1, next.getKey(), next.getValue().orNull(),
 									numEvicted);
 							if (rowsInBatch == 0) {
 								writtenToDb = true;
@@ -513,15 +485,14 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 					}
 					// Flush batch if has rows
 					if (rowsInBatch > 0) {
-						batchInsert(0, 0, null, null, 0);
+						batchInsert(0, null, null, 0);
 						writtenToDb = true;
 					}
 
 					// If we have written new values to the database we need to
-					// increment our lookup timestamp so we will read them back
-					// next time they are requested
+					// set the lastTimestamp accordingly
 					if (writtenToDb) {
-						lookupTs = lookupTs + 1;
+						lastTimestamp = lastTimestamp + 1;
 					}
 
 				} catch (IOException e) {

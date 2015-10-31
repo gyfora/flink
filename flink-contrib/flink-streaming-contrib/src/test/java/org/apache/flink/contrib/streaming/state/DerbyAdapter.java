@@ -69,11 +69,10 @@ public class DerbyAdapter extends DbAdapter {
 			smt.executeUpdate(
 					"CREATE TABLE kvstate_" + stateId
 							+ " ("
-							+ "checkpointId bigint, "
 							+ "timestamp bigint, "
 							+ "k varchar(256) for bit data, "
 							+ "v blob, "
-							+ "PRIMARY KEY (k, checkpointId, timestamp)"
+							+ "PRIMARY KEY (k, timestamp)"
 							+ ")");
 		} catch (SQLException se) {
 			if (se.getSQLState().equals("X0Y32")) {
@@ -93,9 +92,8 @@ public class DerbyAdapter extends DbAdapter {
 		validateStateId(stateId);
 		PreparedStatement smt = con.prepareStatement("SELECT v " + "FROM kvstate_" + stateId
 				+ " WHERE k = ? "
-				+ "AND checkpointId <= ? AND "
-				+ "timestamp <= ? "
-				+ "ORDER BY checkpointId DESC");
+				+ " AND timestamp <= ? "
+				+ "ORDER BY timestamp DESC");
 		smt.setMaxRows(1);
 		return smt;
 	}
