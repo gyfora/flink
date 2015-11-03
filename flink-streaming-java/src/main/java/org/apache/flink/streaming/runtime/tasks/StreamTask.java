@@ -32,6 +32,7 @@ import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.jobgraph.tasks.StatefulTask;
 import org.apache.flink.runtime.taskmanager.DispatcherThreadFactory;
 import org.apache.flink.runtime.util.event.EventListener;
+import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -466,6 +467,11 @@ public abstract class StreamTask<OUT, Operator extends StreamOperator<OUT>>
 		synchronized (lock) {
 			if (isRunning) {
 				LOG.debug("Notification of complete checkpoint for task {}", getName());
+				
+				// We first notify the state backend if necessary
+				if (stateBackend instanceof CheckpointNotifier) {
+					((CheckpointNotifier) stateBackend).notifyCheckpointComplete(checkpointId);
+				}
 				
 				for (StreamOperator<?> operator : operatorChain.getAllOperators()) {
 					if (operator != null) {

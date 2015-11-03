@@ -68,6 +68,7 @@ public class DbStateBackendTest {
 		conf = new DbBackendConfig("flink", "flink",
 				"jdbc:derby://localhost:1527/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true");
 		conf.setDbAdapterClass(DerbyAdapter.class);
+		conf.setKvStateCompactionFrequency(1);
 
 	}
 
@@ -165,7 +166,7 @@ public class DbStateBackendTest {
 
 			testFsNonPartitionedSnapshotting(backend);
 
-			KvState<Integer, String, DbStateBackend> kv = backend.createKvState(1, "state1", IntSerializer.INSTANCE,
+			LazyDbKvState<Integer, String> kv = backend.createKvState(1, "state1", IntSerializer.INSTANCE,
 					StringSerializer.INSTANCE, null);
 
 			assertTrue(isTableCreated(backend.getConnection(), "kvstate_" + env.getJobID() + "_1_state1"));
@@ -186,7 +187,7 @@ public class DbStateBackendTest {
 			assertEquals(2, kv.size());
 
 			kv.shapshot(682375462378L, System.currentTimeMillis());
-
+			
 			// make some more modifications
 			kv.setCurrentKey(1);
 			kv.update("u1");
@@ -194,10 +195,13 @@ public class DbStateBackendTest {
 			kv.update("u2");
 			kv.setCurrentKey(3);
 			kv.update("u3");
+			kv.notifyCheckpointComplete(682375462378L);
+
 
 			// draw another snapshot
 			KvStateSnapshot<Integer, String, DbStateBackend> snapshot2 = kv.shapshot(682375462379L,
 					System.currentTimeMillis());
+			kv.notifyCheckpointComplete(682375462379L);
 
 			// validate the original state
 			assertEquals(3, kv.size());
@@ -220,7 +224,7 @@ public class DbStateBackendTest {
 			restored2.setCurrentKey(3);
 			assertEquals("u3", restored2.value());
 
-			KvState<Integer, String, DbStateBackend> kv2 = backend2.createKvState(1, "state2", IntSerializer.INSTANCE,
+			LazyDbKvState<Integer, String> kv2 = backend2.createKvState(1, "state2", IntSerializer.INSTANCE,
 					StringSerializer.INSTANCE, "a");
 
 			kv2.setCurrentKey(1);
@@ -231,8 +235,9 @@ public class DbStateBackendTest {
 			kv2.update(null);
 			assertEquals("a", kv2.value());
 
-			KvStateSnapshot<Integer, String, DbStateBackend> snapshot3 = kv2.shapshot(682375462379L,
+			KvStateSnapshot<Integer, String, DbStateBackend> snapshot3 = kv2.shapshot(682375462380L,
 					System.currentTimeMillis());
+			kv2.notifyCheckpointComplete(682375462380L);
 			try {
 				// Restoring should fail with the wrong backend
 				snapshot3.restoreState(backend, IntSerializer.INSTANCE, StringSerializer.INSTANCE, "a",
@@ -370,6 +375,7 @@ public class DbStateBackendTest {
 		kv.setCurrentKey(3);
 		kv.update("456");
 		kv.setCurrentKey(2);
+		kv.notifyCheckpointComplete(682375462379L);
 		kv.update("2");
 		kv.setCurrentKey(4);
 		kv.update("4");
