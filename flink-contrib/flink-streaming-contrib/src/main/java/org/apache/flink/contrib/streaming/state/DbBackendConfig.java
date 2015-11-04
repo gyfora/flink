@@ -21,9 +21,6 @@ import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.util.List;
-
-import com.google.common.collect.Lists;
 
 /**
  * 
@@ -38,10 +35,10 @@ public class DbBackendConfig implements Serializable {
 	// Database connection properties
 	private final String userName;
 	private final String userPassword;
-	private final List<String> shardUrls;
+	private final String url;
 
 	// JDBC Driver + DbAdapter information
-	private Class<? extends MySqlAdapter> dbAdapterClass = MySqlAdapter.class;
+	private Class<? extends DbAdapter> dbAdapterClass = MySqlAdapter.class;
 	private String JDBCDriver = null;
 
 	private int maxNumberOfSqlRetries = 5;
@@ -52,26 +49,6 @@ public class DbBackendConfig implements Serializable {
 	private int maxKvInsertBatchSize = 1000;
 	private float maxKvEvictFraction = 0.1f;
 	private int kvStateCompactionFreq = -1;
-
-	/**
-	 * Creates a new sharded database state backend configuration with the given
-	 * parameters and default {@link MySqlAdapter}.
-	 * 
-	 * @param dbUserName
-	 *            The username used to connect to the database at the given url.
-	 * @param dbUserPassword
-	 *            The password used to connect to the database at the given url
-	 *            and username.
-	 * @param dbShardUrls
-	 *            The list of JDBC urls of the databases that will be used as
-	 *            shards for the state backend. Sharding of the state will
-	 *            happen based on the subtask index of the given task.
-	 */
-	public DbBackendConfig(String dbUserName, String dbUserPassword, List<String> dbShardUrls) {
-		this.userName = dbUserName;
-		this.userPassword = dbUserPassword;
-		this.shardUrls = dbShardUrls;
-	}
 
 	/**
 	 * Creates a new database state backend configuration with the given
@@ -87,7 +64,9 @@ public class DbBackendConfig implements Serializable {
 	 *            "jdbc:mysql://localhost:3306/flinkdb".
 	 */
 	public DbBackendConfig(String dbUserName, String dbUserPassword, String dbUrl) {
-		this(dbUserName, dbUserPassword, Lists.newArrayList(dbUrl));
+		this.userName = dbUserName;
+		this.userPassword = dbUserPassword;
+		this.url = dbUrl;
 	}
 
 	/**
@@ -106,45 +85,21 @@ public class DbBackendConfig implements Serializable {
 	}
 
 	/**
-	 * Number of database shards defined.
-	 */
-	public int getNumberOfShards() {
-		return shardUrls.size();
-	}
-
-	/**
-	 * Database shard urls as provided in the constructor.
-	 * 
-	 */
-	public List<String> getShardUrls() {
-		return shardUrls;
-	}
-
-	/**
 	 * The url of the first shard.
 	 * 
 	 */
 	public String getUrl() {
-		return getShardUrl(0);
+		return url;
 	}
 
 	/**
-	 * The url of a specific shard.
-	 * 
-	 */
-	public String getShardUrl(int shardIndex) {
-		validateShardIndex(shardIndex);
-		return shardUrls.get(shardIndex);
-	}
-
-	/**
-	 * Get an instance of the {@link MySqlAdapter} that will be used to operate on
+	 * Get an instance of the {@link DbAdapter} that will be used to operate on
 	 * the database during checkpointing.
 	 * 
 	 * @return An instance of the class set in {@link #setDbAdapterClass(Class)}
 	 *         or a {@link MySqlAdapter} instance if a custom class was not set.
 	 */
-	public MySqlAdapter getDbAdapter() {
+	public DbAdapter getDbAdapter() {
 		try {
 			return dbAdapterClass.newInstance();
 		} catch (Exception e) {
@@ -173,17 +128,17 @@ public class DbBackendConfig implements Serializable {
 	 * the {@link #getDbAdapter()} method.
 	 * 
 	 */
-	public Class<? extends MySqlAdapter> getDbAdapterClass() {
+	public Class<? extends DbAdapter> getDbAdapterClass() {
 		return dbAdapterClass;
 	}
 
 	/**
-	 * Set the Class that will be used to instantiate the {@link MySqlAdapter} for
+	 * Set the Class that will be used to instantiate the {@link DbAdapter} for
 	 * the {@link #getDbAdapter()} method. The class should have an empty
 	 * constructor.
 	 * 
 	 */
-	public void setDbAdapterClass(Class<? extends MySqlAdapter> dbAdapterClass) {
+	public void setDbAdapterClass(Class<? extends DbAdapter> dbAdapterClass) {
 		this.dbAdapterClass = dbAdapterClass;
 	}
 
@@ -314,17 +269,6 @@ public class DbBackendConfig implements Serializable {
 	 * @throws SQLException
 	 */
 	public Connection createConnection() throws SQLException {
-		return createConnection(0);
-	}
-
-	/**
-	 * Creates a new {@link Connection} using the set parameters for the given
-	 * shard index.
-	 * 
-	 * @throws SQLException
-	 */
-	public Connection createConnection(int shardIndex) throws SQLException {
-		validateShardIndex(shardIndex);
 		if (JDBCDriver != null) {
 			try {
 				Class.forName(JDBCDriver);
@@ -332,32 +276,9 @@ public class DbBackendConfig implements Serializable {
 				throw new RuntimeException("Could not load JDBC driver class", e);
 			}
 		}
-		return DriverManager.getConnection(getShardUrl(shardIndex), userName, userPassword);
+		return DriverManager.getConnection(url, userName, userPassword);
 	}
-
-	/**
-	 * Creates a new {@link DbBackendConfig} with the selected shard as its only
-	 * shard.
-	 * 
-	 */
-	public DbBackendConfig createConfigForShard(int shardIndex) {
-		validateShardIndex(shardIndex);
-		DbBackendConfig c = new DbBackendConfig(userName, userPassword, shardUrls.get(shardIndex));
-		c.setJDBCDriver(JDBCDriver);
-		c.setDbAdapterClass(dbAdapterClass);
-		c.setKvCacheSize(kvStateCacheSize);
-		c.setMaxKvInsertBatchSize(maxKvInsertBatchSize);
-		return c;
-	}
-
-	private void validateShardIndex(int i) {
-		if (i < 0) {
-			throw new IllegalArgumentException("Index must be positive.");
-		} else if (getNumberOfShards() <= i) {
-			throw new IllegalArgumentException("Index must be less then the total number of shards.");
-		}
-	}
-
+	
 	@Override
 	public int hashCode() {
 		final int prime = 31;
@@ -368,7 +289,7 @@ public class DbBackendConfig implements Serializable {
 		result = prime * result + Float.floatToIntBits(maxKvEvictFraction);
 		result = prime * result + maxKvInsertBatchSize;
 		result = prime * result + kvStateCompactionFreq;
-		result = prime * result + ((shardUrls == null) ? 0 : shardUrls.hashCode());
+		result = prime * result + ((url == null) ? 0 : url.hashCode());
 		result = prime * result + ((userName == null) ? 0 : userName.hashCode());
 		result = prime * result + ((userPassword == null) ? 0 : userPassword.hashCode());
 		return result;
@@ -412,11 +333,11 @@ public class DbBackendConfig implements Serializable {
 		if (kvStateCompactionFreq != other.kvStateCompactionFreq) {
 			return false;
 		}
-		if (shardUrls == null) {
-			if (other.shardUrls != null) {
+		if (url == null) {
+			if (other.url != null) {
 				return false;
 			}
-		} else if (!shardUrls.equals(other.shardUrls)) {
+		} else if (!url.equals(other.url)) {
 			return false;
 		}
 		if (userName == null) {

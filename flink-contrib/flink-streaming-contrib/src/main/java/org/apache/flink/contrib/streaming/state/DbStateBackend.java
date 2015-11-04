@@ -73,7 +73,6 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	private final DbAdapter dbAdapter;
 
 	private Connection con;
-	private int shardIndex = 0;
 
 	private final int numSqlRetries;
 	private final int sqlRetrySleep;
@@ -128,10 +127,6 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	public Environment getEnvironment() {
 		return env;
 	}
-	
-	public int getShardIndex() {
-		return shardIndex;
-	}
 
 	/**
 	 * Get the backend configuration object.
@@ -160,7 +155,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 					insertStatement.executeUpdate();
 
 					return new DbStateHandle<S>(env.getJobID().toString(), checkpointID, timestamp, handleId,
-							dbConfig.createConfigForShard(shardIndex));
+							dbConfig);
 				}
 			}, numSqlRetries, sqlRetrySleep);
 		} else {
@@ -185,7 +180,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
 		return new LazyDbKvState<K, V>(
 				env.getJobID() + "_" + operatorId + "_" + stateName,
-				shardIndex == env.getIndexInSubtaskGroup(),
+				env.getIndexInSubtaskGroup() == 0,
 				getConnection(),
 				getConfiguration(),
 				keySerializer,
@@ -198,11 +193,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 		this.rnd = new Random();
 		this.env = env;
 
-		// If there are multiple shards provided in the config we partition the
-		// writes by subtask index
-		shardIndex = env.getIndexInSubtaskGroup() % dbConfig.getNumberOfShards();
-
-		con = dbConfig.createConnection(shardIndex);
+		con = dbConfig.createConnection();
 		// We want the most light-weight transaction isolation level as we don't
 		// have conflicting reads/writes. We just want to be able to roll back
 		// batch inserts for k-v snapshots. This requirement might be removed in

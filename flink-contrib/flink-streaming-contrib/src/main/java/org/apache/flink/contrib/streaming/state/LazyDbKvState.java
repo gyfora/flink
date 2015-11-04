@@ -32,7 +32,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.Callable;
 
-import org.apache.derby.client.am.SqlException;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.state.KvState;
@@ -80,7 +79,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	// Database properties
 	private final DbBackendConfig conf;
 	private final Connection con;
-	private final MySqlAdapter dbAdapter;
+	private final DbAdapter dbAdapter;
 	private final BatchInsert batchInsert;
 
 	// Statements for key-lookups and inserts as prepared by the dbAdapter
@@ -313,7 +312,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			}, stateBackend.getConfiguration().getMaxNumberOfSqlRetries(),
 					stateBackend.getConfiguration().getSleepBetweenSqlRetries());
 
-			boolean cleanup = stateBackend.getEnvironment().getIndexInSubtaskGroup() == stateBackend.getShardIndex();
+			boolean cleanup = stateBackend.getEnvironment().getIndexInSubtaskGroup() == 0;
 
 			// Restore the KvState
 			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, cleanup,

@@ -105,7 +105,7 @@ public class DerbyAdapter extends MySqlAdapter {
 	}
 
 	@Override
-	protected void compactKvStates(String stateId, Connection con, long lowerBound, long upperBound)
+	public void compactKvStates(String stateId, Connection con, long lowerBound, long upperBound)
 			throws SQLException {
 		validateStateId(stateId);
 

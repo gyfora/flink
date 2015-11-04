@@ -170,11 +170,11 @@ public class MySqlAdapter implements Serializable, DbAdapter {
 			smt.executeUpdate("DELETE FROM kvstate_" + stateId
 					+ " WHERE id > " + checkpointId
 					+ " AND id < " + nextId);
-			System.out.println("Cleaned up");
 		}
 	}
 
-	protected void compactKvStates(String stateId, Connection con, long lowerId, long upperId)
+	@Override
+	public void compactKvStates(String stateId, Connection con, long lowerId, long upperId)
 			throws SQLException {
 		validateStateId(stateId);
 
@@ -188,7 +188,6 @@ public class MySqlAdapter implements Serializable, DbAdapter {
 					+ " ) m"
 					+ " ON state.k = m.k"
 					+ " AND state.id >= " + lowerId);
-			System.out.println("Compacted");
 		}
 	}
 
@@ -215,7 +214,6 @@ public class MySqlAdapter implements Serializable, DbAdapter {
 				}
 				insertStatement.executeBatch();
 				insertStatement.clearBatch();
-				System.out.println("Batch inserted");
 				return null;
 			}
 		}, new Callable<Void>() {

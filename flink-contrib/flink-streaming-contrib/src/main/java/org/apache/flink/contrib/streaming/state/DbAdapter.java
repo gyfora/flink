@@ -167,4 +167,10 @@ public interface DbAdapter {
 	void insertBatch(String stateId, DbBackendConfig conf, Connection con, PreparedStatement insertStatement,
 			long checkpointId, List<Tuple2<byte[], byte[]>> toInsert) throws IOException;
 
+	/**
+	 * Compact the states between two checkpoint ids by only keeping the most
+	 * recent.
+	 */
+	void compactKvStates(String kvStateId, Connection con, long lowerId, long upperId) throws SQLException;
+
 }
