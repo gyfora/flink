@@ -615,8 +615,8 @@ public class WindowOperator<K, IN, OUT, W extends Window>
 	}
 
 	@Override
-	public void restoreState(StreamTaskState taskState) throws Exception {
-		super.restoreState(taskState);
+	public void restoreState(StreamTaskState taskState, long nextCpId) throws Exception {
+		super.restoreState(taskState, nextCpId);
 
 
 		@SuppressWarnings("unchecked")
