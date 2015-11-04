@@ -75,7 +75,9 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	private Connection con;
 	private int shardIndex = 0;
 
-	private static final int NUM_RETRIES = 5;
+	private final int numSqlRetries;
+	private final int sqlRetrySleep;
+	
 	private PreparedStatement insertStatement;
 
 	// ------------------------------------------------------
@@ -93,6 +95,8 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	public DbStateBackend(DbBackendConfig backendConfig) {
 		this.dbConfig = backendConfig;
 		dbAdapter = backendConfig.getDbAdapter();
+		numSqlRetries = backendConfig.getMaxNumberOfSqlRetries();
+		sqlRetrySleep = backendConfig.getSleepBetweenSqlRetries();
 	}
 
 	/**
@@ -119,6 +123,14 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	 */
 	public boolean isInitialized() {
 		return con != null;
+	}
+	
+	public Environment getEnvironment() {
+		return env;
+	}
+	
+	public int getShardIndex(){
+		return shardIndex;
 	}
 
 	/**
@@ -150,7 +162,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 					return new DbStateHandle<S>(env.getJobID().toString(), checkpointID, timestamp, handleId,
 							dbConfig.createConfigForShard(shardIndex));
 				}
-			}, NUM_RETRIES);
+			}, numSqlRetries, sqlRetrySleep);
 		} else {
 			return nonPartitionedStateBackend.checkpointStateSerializable(state, checkpointID, timestamp);
 		}
@@ -173,6 +185,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
 		return new LazyDbKvState<K, V>(
 				env.getJobID() + "_" + operatorId + "_" + stateName,
+				shardIndex == env.getIndexInSubtaskGroup(),
 				getConnection(),
 				getConfiguration(),
 				keySerializer,
@@ -204,7 +217,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 					dbAdapter.createCheckpointsTable(env.getJobID().toString(), getConnection());
 					return dbAdapter.prepareCheckpointInsert(env.getJobID().toString(), getConnection());
 				}
-			}, NUM_RETRIES);
+			}, numSqlRetries, sqlRetrySleep);
 		} else {
 			nonPartitionedStateBackend.initializeForJob(env);
 		}

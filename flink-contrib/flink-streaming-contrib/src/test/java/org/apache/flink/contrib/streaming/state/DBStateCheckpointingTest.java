@@ -89,6 +89,7 @@ public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
 
 		DbBackendConfig conf = new DbBackendConfig("flink", "flink", derbyShards);
 		conf.setDbAdapterClass(DerbyAdapter.class);
+		conf.setKvStateCompactionFrequency(2);
 
 		// We store the non-partitioned states (source offset) in-memory
 		DbStateBackend backend = new DbStateBackend(conf, new MemoryStateBackend());
@@ -162,7 +163,7 @@ public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
 					ctx.collect(index % NUM_KEYS);
 				}
 
-				if (rnd.nextDouble() < 0.004) {
+				if (rnd.nextDouble() < 0.008) {
 					Thread.sleep(1);
 				}
 			}

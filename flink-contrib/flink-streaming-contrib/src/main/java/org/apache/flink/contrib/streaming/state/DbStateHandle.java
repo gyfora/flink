@@ -36,7 +36,6 @@ import org.eclipse.jetty.util.log.Log;
 public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 
 	private static final long serialVersionUID = 1L;
-	private static final int NUM_RETRIES = 5;
 
 	private final String jobId;
 	private final DbBackendConfig dbConfig;
@@ -61,7 +60,7 @@ public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 					return dbConfig.getDbAdapter().getCheckpoint(jobId, con, checkpointId, checkpointTs, handleId);
 				}
 			}
-		}, NUM_RETRIES);
+		}, dbConfig.getMaxNumberOfSqlRetries(), dbConfig.getSleepBetweenSqlRetries());
 	}
 
 	@Override
@@ -74,7 +73,7 @@ public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 					}
 					return true;
 				}
-			}, NUM_RETRIES);
+			}, dbConfig.getMaxNumberOfSqlRetries(), dbConfig.getSleepBetweenSqlRetries());
 		} catch (IOException e) {
 			// We don't want to fail the job here, but log the error.
 			if (Log.isDebugEnabled()) {

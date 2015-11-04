@@ -244,21 +244,21 @@ public class DbAdapter implements Serializable {
 	}
 
 	/**
-     * Retrieve the latest value from the database for a given key and
-     * timestamp.
-     * 
-     * @param stateId
-     *            Unique identifier of the kvstate (usually the table name).
-     * @param lookupStatement
-     *            The statement returned by
-     *            {@link #prepareKeyLookup(String, Connection)}.
-     * @param key
-     *            The key to lookup.
-     * @param lookupTimestamp
-     *            Latest timestamp we want to retrieve
-     * @return The latest valid value for the key.
-     * @throws SQLException
-     */
+	 * Retrieve the latest value from the database for a given key and
+	 * timestamp.
+	 * 
+	 * @param stateId
+	 *            Unique identifier of the kvstate (usually the table name).
+	 * @param lookupStatement
+	 *            The statement returned by
+	 *            {@link #prepareKeyLookup(String, Connection)}.
+	 * @param key
+	 *            The key to lookup.
+	 * @param lookupTimestamp
+	 *            Latest timestamp we want to retrieve
+	 * @return The latest valid value for the key.
+	 * @throws SQLException
+	 */
 	public byte[] lookupKey(String stateId, PreparedStatement lookupStatement, byte[] key, long lookupTimestamp)
 			throws SQLException {
 		lookupStatement.setBytes(1, key);
@@ -283,8 +283,29 @@ public class DbAdapter implements Serializable {
 		validateStateId(stateId);
 		try (Statement smt = con.createStatement()) {
 			smt.executeUpdate("DELETE FROM kvstate_" + stateId
-					+ " WHERE timestamp > " + checkpointTimestamp 
+					+ " WHERE timestamp > " + checkpointTimestamp
 					+ " AND timestamp < " + recoveryTimestamp);
+		}
+	}
+
+	/**
+	 * Compact the state checkpoints between (including) the given timestamp
+	 * bounds.
+	 */
+	protected void compactKvStates(String stateId, Connection con, long lowerTs, long upperTs)
+			throws SQLException {
+		validateStateId(stateId);
+
+		try (Statement smt = con.createStatement()) {
+			smt.executeUpdate("DELETE state.* FROM kvstate_" + stateId + " AS state"
+					+ " JOIN"
+					+ " ("
+					+ " 	SELECT MAX(timestamp) AS maxts, k FROM kvstate_" + stateId
+					+ " 	WHERE timestamp BETWEEN " + lowerTs + " AND " + upperTs
+					+ " 	GROUP BY k"
+					+ " ) m"
+					+ " ON state.k = m.k"
+					+ " AND state.timestamp >= " + lowerTs);
 		}
 	}
 

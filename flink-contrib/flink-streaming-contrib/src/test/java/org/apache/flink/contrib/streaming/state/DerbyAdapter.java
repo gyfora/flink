@@ -97,5 +97,22 @@ public class DerbyAdapter extends DbAdapter {
 		smt.setMaxRows(1);
 		return smt;
 	}
+	
+	@Override
+	protected void compactKvStates(String stateId, Connection con, long lowerBound, long upperBound)
+			throws SQLException {
+		validateStateId(stateId);
 
+		try (Statement smt = con.createStatement()) {
+			smt.executeUpdate("DELETE FROM kvstate_" + stateId + " t1"
+					+ " WHERE EXISTS"
+					+ " ("
+					+ " 	SELECT * FROM kvstate_" + stateId + " t2"
+					+ " 	WHERE t2.k = t1.k"
+					+ "		AND t2.timestamp > t1.timestamp"
+					+ " 	AND t2.timestamp <=" + upperBound
+					+ "		AND t2.timestamp >= " + lowerBound 
+					+ " )");
+		}
+	}
 }

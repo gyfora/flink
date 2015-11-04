@@ -30,6 +30,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -48,11 +49,13 @@ import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
+import org.apache.flink.util.InstantiationUtil;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.google.common.base.Optional;
+import com.google.common.collect.Lists;
 
 public class DbStateBackendTest {
 
@@ -68,6 +71,7 @@ public class DbStateBackendTest {
 		conf = new DbBackendConfig("flink", "flink",
 				"jdbc:derby://localhost:1527/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true");
 		conf.setDbAdapterClass(DerbyAdapter.class);
+		conf.setKvStateCompactionFrequency(1);
 
 	}
 
@@ -163,12 +167,11 @@ public class DbStateBackendTest {
 			backend.initializeForJob(env);
 			backend2.initializeForJob(env2);
 
-			testFsNonPartitionedSnapshotting(backend);
-
-			KvState<Integer, String, DbStateBackend> kv = backend.createKvState(1, "state1", IntSerializer.INSTANCE,
+			LazyDbKvState<Integer, String> kv = backend.createKvState(1, "state1", IntSerializer.INSTANCE,
 					StringSerializer.INSTANCE, null);
 
-			assertTrue(isTableCreated(backend.getConnection(), "kvstate_" + env.getJobID() + "_1_state1"));
+			String tableName = "kvstate_" + env.getJobID() + "_1_state1";
+			assertTrue(isTableCreated(backend.getConnection(), tableName));
 
 			assertEquals(0, kv.size());
 
@@ -185,7 +188,7 @@ public class DbStateBackendTest {
 			assertEquals("1", kv.value());
 			assertEquals(2, kv.size());
 
-			kv.shapshot(682375462378L, System.currentTimeMillis());
+			kv.shapshot(682375462378L, 100);
 
 			// make some more modifications
 			kv.setCurrentKey(1);
@@ -195,9 +198,17 @@ public class DbStateBackendTest {
 			kv.setCurrentKey(3);
 			kv.update("u3");
 
+			assertTrue(containsKey(backend.getConnection(), tableName, 1, 100));
+
+			kv.notifyCheckpointComplete(682375462378L);
+
 			// draw another snapshot
 			KvStateSnapshot<Integer, String, DbStateBackend> snapshot2 = kv.shapshot(682375462379L,
-					System.currentTimeMillis());
+					200);
+			assertTrue(containsKey(backend.getConnection(), tableName, 1, 100));
+			kv.notifyCheckpointComplete(682375462379L);
+			// Compaction should be performed
+			assertFalse(containsKey(backend.getConnection(), tableName, 1, 100));
 
 			// validate the original state
 			assertEquals(3, kv.size());
@@ -210,7 +221,7 @@ public class DbStateBackendTest {
 
 			// restore the first snapshot and validate it
 			KvState<Integer, String, DbStateBackend> restored2 = snapshot2.restoreState(backend, IntSerializer.INSTANCE,
-					StringSerializer.INSTANCE, null, getClass().getClassLoader(), System.currentTimeMillis() + 1);
+					StringSerializer.INSTANCE, null, getClass().getClassLoader(), 300);
 
 			assertEquals(0, restored2.size());
 			restored2.setCurrentKey(1);
@@ -220,7 +231,7 @@ public class DbStateBackendTest {
 			restored2.setCurrentKey(3);
 			assertEquals("u3", restored2.value());
 
-			KvState<Integer, String, DbStateBackend> kv2 = backend2.createKvState(1, "state2", IntSerializer.INSTANCE,
+			LazyDbKvState<Integer, String> kv2 = backend2.createKvState(1, "state2", IntSerializer.INSTANCE,
 					StringSerializer.INSTANCE, "a");
 
 			kv2.setCurrentKey(1);
@@ -231,8 +242,9 @@ public class DbStateBackendTest {
 			kv2.update(null);
 			assertEquals("a", kv2.value());
 
-			KvStateSnapshot<Integer, String, DbStateBackend> snapshot3 = kv2.shapshot(682375462379L,
-					System.currentTimeMillis());
+			KvStateSnapshot<Integer, String, DbStateBackend> snapshot3 = kv2.shapshot(682375462380L,
+					400);
+			kv2.notifyCheckpointComplete(682375462380L);
 			try {
 				// Restoring should fail with the wrong backend
 				snapshot3.restoreState(backend, IntSerializer.INSTANCE, StringSerializer.INSTANCE, "a",
@@ -249,9 +261,30 @@ public class DbStateBackendTest {
 		}
 	}
 
-	private void testFsNonPartitionedSnapshotting(DbStateBackend backend) {
-		// TODO Auto-generated method stub
+	@Test
+	public void testCleanupTasks() throws Exception {
+		String url = "jdbc:derby://localhost:1527/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true";
 
+		DbBackendConfig conf = new DbBackendConfig("flink", "flink", Lists.newArrayList(url, url));
+		conf.setDbAdapterClass(DerbyAdapter.class);
+
+		DbStateBackend backend1 = new DbStateBackend(conf);
+		DbStateBackend backend2 = new DbStateBackend(conf);
+		DbStateBackend backend3 = new DbStateBackend(conf);
+		DbStateBackend backend4 = new DbStateBackend(conf);
+		DbStateBackend backend5 = new DbStateBackend(conf);
+
+		backend1.initializeForJob(new DummyEnvironment("test", 5, 0));
+		backend2.initializeForJob(new DummyEnvironment("test", 5, 1));
+		backend3.initializeForJob(new DummyEnvironment("test", 5, 2));
+		backend4.initializeForJob(new DummyEnvironment("test", 5, 3));
+		backend5.initializeForJob(new DummyEnvironment("test", 5, 4));
+
+		assertTrue(backend1.createKvState(1, "a", null, null, null).isCompacter());
+		assertTrue(backend2.createKvState(1, "a", null, null, null).isCompacter());
+		assertFalse(backend3.createKvState(1, "a", null, null, null).isCompacter());
+		assertFalse(backend4.createKvState(1, "a", null, null, null).isCompacter());
+		assertFalse(backend5.createKvState(1, "a", null, null, null).isCompacter());
 	}
 
 	@Test
@@ -370,6 +403,7 @@ public class DbStateBackendTest {
 		kv.setCurrentKey(3);
 		kv.update("456");
 		kv.setCurrentKey(2);
+		kv.notifyCheckpointComplete(682375462379L);
 		kv.update("2");
 		kv.setCurrentKey(4);
 		kv.update("4");
@@ -402,6 +436,16 @@ public class DbStateBackendTest {
 		try (Statement smt = con.createStatement()) {
 			ResultSet res = smt.executeQuery("select * from " + tableName);
 			return !res.next();
+		}
+	}
+
+	private static boolean containsKey(Connection con, String tableName, int key, long ts)
+			throws SQLException, IOException {
+		try (PreparedStatement smt = con
+				.prepareStatement("select * from " + tableName + " where k=? and timestamp=?")) {
+			smt.setBytes(1, InstantiationUtil.serializeToByteArray(IntSerializer.INSTANCE, key));
+			smt.setLong(2, ts);
+			return smt.executeQuery().next();
 		}
 	}
 

@@ -37,7 +37,7 @@ public final class SQLRetrier implements Serializable {
 	private static final Logger LOG = LoggerFactory.getLogger(SQLRetrier.class);
 	private static final Random rnd = new Random();
 
-	private static final int SLEEP_TIME = 100;
+	private static final int SLEEP_TIME = 10;
 
 	private SQLRetrier() {
 
@@ -53,19 +53,81 @@ public final class SQLRetrier implements Serializable {
 	 *            The callable to be retried.
 	 * @param numRetries
 	 *            Max number of retries before throwing an {@link IOException}.
-	 * @return The result of the {@link Callable#call()}.
 	 * @throws IOException
 	 *             The wrapped {@link SQLException}.
 	 */
 	public static <X> X retry(Callable<X> callable, int numRetries) throws IOException {
+		return retry(callable, numRetries, SLEEP_TIME);
+	}
+
+	/**
+	 * Tries to run the given {@link Callable} the predefined number of times
+	 * before throwing an {@link IOException}. This method will only retries
+	 * calls ending in {@link SQLException}. Other exceptions will cause a
+	 * {@link RuntimeException}.
+	 * 
+	 * @param callable
+	 *            The callable to be retried.
+	 * @param numRetries
+	 *            Max number of retries before throwing an {@link IOException}.
+	 * @param sleep
+	 *            The retrier will wait a random number of msecs between 1 and
+	 *            sleep.
+	 * @return The result of the {@link Callable#call()}.
+	 * @throws IOException
+	 *             The wrapped {@link SQLException}.
+	 */
+	public static <X> X retry(Callable<X> callable, int numRetries, int sleep) throws IOException {
 		int numtries = 0;
 		while (true) {
 			try {
 				return callable.call();
 			} catch (SQLException e) {
-				handleSQLException(e, ++numtries, numRetries);
+				handleSQLException(e, ++numtries, numRetries, sleep);
 			} catch (Exception e) {
 				throw new RuntimeException(e);
+			}
+		}
+	}
+
+	/**
+	 * Tries to run the given {@link Callable} the predefined number of times
+	 * before throwing an {@link IOException}. This method will only retries
+	 * calls ending in {@link SQLException}. Other exceptions will cause a
+	 * {@link RuntimeException}.
+	 * 
+	 * Additionally the user can supply a second callable which will be executed
+	 * every time the first callable throws a {@link SQLException}.
+	 * 
+	 * @param callable
+	 *            The callable to be retried.
+	 * @param onException
+	 *            The callable to be executed when an {@link SQLException} was
+	 *            encountered. Exceptions thrown during this call are ignored.
+	 * @param numRetries
+	 *            Max number of retries before throwing an {@link IOException}.
+	 * @param sleep
+	 *            The retrier will wait a random number of msecs between 1 and
+	 *            sleep.
+	 * @return The result of the {@link Callable#call()}.
+	 * @throws IOException
+	 *             The wrapped {@link SQLException}.
+	 */
+	public static <X, Y> X retry(Callable<X> callable, Callable<Y> onException, int numRetries, int sleep)
+			throws IOException {
+		int numtries = 0;
+		while (true) {
+			try {
+				return callable.call();
+			} catch (SQLException se) {
+				try {
+					onException.call();
+				} catch (Exception e) {
+					// Exceptions thrown in this call will be ignored
+				}
+				handleSQLException(se, ++numtries, numRetries, sleep);
+			} catch (Exception ex) {
+				throw new RuntimeException(ex);
 			}
 		}
 	}
@@ -90,32 +152,19 @@ public final class SQLRetrier implements Serializable {
 	 * @throws IOException
 	 *             The wrapped {@link SQLException}.
 	 */
-	public static <X, Y> X retry(Callable<X> callable, Callable<Y> onException, int numRetries) throws IOException {
-		int numtries = 0;
-		while (true) {
-			try {
-				return callable.call();
-			} catch (SQLException se) {
-				try {
-					onException.call();
-				} catch (Exception e) {
-					// Exceptions thrown in this call will be ignored
-				}
-				handleSQLException(se, ++numtries, numRetries);
-			} catch (Exception ex) {
-				throw new RuntimeException(ex);
-			}
-		}
+	public static <X, Y> X retry(Callable<X> callable, Callable<Y> onException, int numRetries)
+			throws IOException {
+		return retry(callable, onException, numRetries, SLEEP_TIME);
 	}
 
-	private static void handleSQLException(SQLException e, int numTries, int maxRetries) throws IOException {
+	private static void handleSQLException(SQLException e, int numTries, int maxRetries, int sleep) throws IOException {
 		if (numTries < maxRetries) {
 			if (LOG.isDebugEnabled()) {
 				LOG.debug("Error while executing SQL statement: {}\nRetrying...",
 						e.getMessage());
 			}
 			try {
-				Thread.sleep(numTries * rnd.nextInt(SLEEP_TIME));
+				Thread.sleep(numTries * rnd.nextInt(sleep));
 			} catch (InterruptedException ie) {
 				throw new RuntimeException("Thread has been interrupted.");
 			}

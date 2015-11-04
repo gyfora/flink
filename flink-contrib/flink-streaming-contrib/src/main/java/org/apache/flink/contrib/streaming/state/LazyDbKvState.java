@@ -33,6 +33,7 @@ import java.util.concurrent.Callable;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
+import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
 import org.apache.flink.util.InstantiationUtil;
 import org.eclipse.jetty.util.log.Log;
 import org.slf4j.Logger;
@@ -46,7 +47,7 @@ import com.google.common.base.Optional;
  * cached on heap and are lazily retrieved on access.
  * 
  */
-public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
+public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, CheckpointNotifier {
 
 	private static final Logger LOG = LoggerFactory.getLogger(LazyDbKvState.class);
 
@@ -54,6 +55,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 
 	// Unique id for this state (jobID_operatorID_stateName)
 	private final String kvStateId;
+	// Only 1 KvState per table will compact
+	private final boolean compact;
 
 	private K currentKey;
 	private final V defaultValue;
@@ -64,9 +67,13 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	// ------------------------------------------------------
 
 	// Max number of retries for failed database operations
-	private static final int NUM_RETRIES = 5;
+	private final int numSqlRetries;
+	// Sleep time between two retries
+	private final int sqlRetrySleep;
 	// Max number of key-value pairs inserted in one batch to the database
 	private final int maxInsertBatchSize;
+	// We will do database compaction every so many checkpoints
+	private final int compactEvery;
 
 	// Database properties
 	private final Connection con;
@@ -84,24 +91,29 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	// Timestamp of the last written state
 	private long lastTimestamp;
 
+	private Map<Long, Long> completedCheckpoints = new HashMap<>();
+
 	// ------------------------------------------------------
 
 	/**
 	 * Constructor to initialize the {@link LazyDbKvState} the first time the
 	 * job starts.
 	 */
-	public LazyDbKvState(String kvStateId, Connection con, DbBackendConfig conf, TypeSerializer<K> keySerializer,
+	public LazyDbKvState(String kvStateId, boolean compact, Connection con, DbBackendConfig conf,
+			TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
-		this(kvStateId, con, conf, keySerializer, valueSerializer, defaultValue, -1);
+		this(kvStateId, compact, con, conf, keySerializer, valueSerializer, defaultValue, -1);
 	}
 
 	/**
 	 * Initialize the {@link LazyDbKvState} from a snapshot.
 	 */
-	public LazyDbKvState(String kvStateId, Connection con, final DbBackendConfig conf, TypeSerializer<K> keySerializer,
+	public LazyDbKvState(String kvStateId, boolean cleanup, Connection con, final DbBackendConfig conf,
+			TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer, V defaultValue, long lookupTs) throws IOException {
 
 		this.kvStateId = kvStateId;
+		this.compact = cleanup;
 
 		this.keySerializer = keySerializer;
 		this.valueSerializer = valueSerializer;
@@ -110,6 +122,9 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		this.maxInsertBatchSize = conf.getMaxKvInsertBatchSize();
 		this.con = con;
 		this.dbAdapter = conf.getDbAdapter();
+		this.compactEvery = conf.getKvStateCompactionFrequency();
+		this.numSqlRetries = conf.getMaxNumberOfSqlRetries();
+		this.sqlRetrySleep = conf.getSleepBetweenSqlRetries();
 
 		this.lastTimestamp = lookupTs;
 
@@ -180,6 +195,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 		// Update the last timestamp
 		lastTimestamp = timestamp;
 
+		completedCheckpoints.put(checkpointId, timestamp);
 		return new DbKvStateSnapshot<K, V>(kvStateId, timestamp);
 	}
 
@@ -217,7 +233,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 				return null;
 			}
 
-		}, NUM_RETRIES);
+		}, numSqlRetries, sqlRetrySleep);
 	}
 
 	/**
@@ -269,7 +285,20 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 				con.rollback();
 				return null;
 			}
-		}, NUM_RETRIES);
+		}, numSqlRetries, sqlRetrySleep);
+	}
+
+	@Override
+	public void notifyCheckpointComplete(long checkpointId) throws Exception {
+		// We fetch the corresponding timestamps for compaction
+		long checkpointTs = completedCheckpoints.remove(checkpointId);
+		// If compaction is turned on we compact on the first subtask
+		if (compactEvery > 0 && compact && checkpointId % compactEvery == 0) {
+			dbAdapter.compactKvStates(kvStateId, con, 0, checkpointTs);
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("State succesfully compacted for {}.", kvStateId);
+			}
+		}
 	}
 
 	@Override
@@ -304,6 +333,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	public Map<K, Optional<V>> getModified() {
 		return cache.modified;
 	}
+	
+	public boolean isCompacter(){
+		return compact;
+	}
 
 	/**
 	 * Snapshot that stores a specific checkpoint timestamp and state id, and
@@ -335,22 +368,23 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 			}
 
 			// First we clean up the states written by partially failed
-			// snapshots (if any)
+			// snapshots
 			retry(new Callable<Void>() {
-				// The cleanup will be performed multiple times (by all the
-				// subtasks) but this should not cause any problems as we
-				// are cleaning up based on the recovery timestamp.
 				public Void call() throws Exception {
 					stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(kvStateId,
 							stateBackend.getConnection(), checkpointTimestamp, recoveryTimestamp);
 
 					return null;
 				}
-			}, NUM_RETRIES);
+			}, stateBackend.getConfiguration().getMaxNumberOfSqlRetries(),
+					stateBackend.getConfiguration().getSleepBetweenSqlRetries());
+			
+			boolean cleanup = stateBackend.getEnvironment().getIndexInSubtaskGroup() == stateBackend.getShardIndex();
 
 			// Restore the KvState
-			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, stateBackend.getConnection(),
-					stateBackend.getConfiguration(), keySerializer, valueSerializer, defaultValue, checkpointTimestamp);
+			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, cleanup,
+					stateBackend.getConnection(), stateBackend.getConfiguration(), keySerializer, valueSerializer,
+					defaultValue, checkpointTimestamp);
 
 			if (LOG.isDebugEnabled()) {
 				LOG.debug("KV state({},{}) restored.", kvStateId, checkpointTimestamp);
@@ -361,7 +395,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 
 		@Override
 		public void discardState() throws Exception {
-			// TODO: Consider compaction at this point
+			// Don't discard, it will be compacted by the LazyDbKvState
 		}
 
 	}
@@ -440,7 +474,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 						return serializedVal != null
 								? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
 					}
-				}, NUM_RETRIES);
+				}, numSqlRetries, sqlRetrySleep);
 			} catch (IOException e) {
 				// We need to re-throw this exception to conform to the map
 				// interface, we will catch this when we call the the put/get
@@ -514,5 +548,4 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend> {
 			throw new UnsupportedOperationException();
 		}
 	}
-
 }

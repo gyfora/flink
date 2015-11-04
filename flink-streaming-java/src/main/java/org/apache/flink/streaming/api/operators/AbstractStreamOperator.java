@@ -23,6 +23,7 @@ import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
@@ -183,7 +184,14 @@ public abstract class AbstractStreamOperator<OUT>
 	
 	@Override
 	public void notifyOfCompletedCheckpoint(long checkpointId) throws Exception {
-		// by default, nothing needs a notification of checkpoint completion
+		// We check whether the KvStates require notifications
+		if (keyValueStates != null) {
+			for (KvState<?, ?, ?> kvstate : keyValueStates) {
+				if (kvstate instanceof CheckpointNotifier) {
+					((CheckpointNotifier) kvstate).notifyCheckpointComplete(checkpointId);
+				}
+			}
+		}
 	}
 
 	// ------------------------------------------------------------------------
