@@ -116,6 +116,7 @@ public class MySqlAdapter implements DbAdapter {
 	@Override
 	public void createKVStateTable(String stateId, Connection con) throws SQLException {
 		validateStateId(stateId);
+		con.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
 		try (Statement smt = con.createStatement()) {
 			smt.executeUpdate(
 					"CREATE TABLE IF NOT EXISTS " + stateId
@@ -131,8 +132,7 @@ public class MySqlAdapter implements DbAdapter {
 	@Override
 	public String prepareKVCheckpointInsert(String stateId) throws SQLException {
 		validateStateId(stateId);
-		return "INSERT INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?) "
-				+ "ON DUPLICATE KEY UPDATE v=? ";
+		return "INSERT INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)";
 	}
 
 	@Override
@@ -206,16 +206,20 @@ public class MySqlAdapter implements DbAdapter {
 
 		SQLRetrier.retry(new Callable<Void>() {
 			public Void call() throws Exception {
+				con.setAutoCommit(false);
 				for (Tuple2<byte[], byte[]> kv : toInsert) {
 					setKvInsertParams(stateId, insertStatement, checkpointTs, kv.f0, kv.f1);
 					insertStatement.addBatch();
 				}
 				insertStatement.executeBatch();
+				con.commit();
+				con.setAutoCommit(true);
 				insertStatement.clearBatch();
 				return null;
 			}
 		}, new Callable<Void>() {
 			public Void call() throws Exception {
+				con.rollback();
 				insertStatement.clearBatch();
 				return null;
 			}
@@ -228,16 +232,14 @@ public class MySqlAdapter implements DbAdapter {
 		insertStatement.setBytes(2, key);
 		if (value != null) {
 			insertStatement.setBytes(3, value);
-			insertStatement.setBytes(4, value);
 		} else {
 			insertStatement.setNull(3, Types.BLOB);
-			insertStatement.setNull(4, Types.BLOB);
 		}
 	}
-	
+
 	@Override
 	public void keepAlive(Connection con) throws SQLException {
-		try(Statement smt = con.createStatement()) {
+		try (Statement smt = con.createStatement()) {
 			smt.executeQuery("SELECT 1");
 		}
 	}
