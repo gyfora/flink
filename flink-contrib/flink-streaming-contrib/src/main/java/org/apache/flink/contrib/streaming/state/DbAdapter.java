@@ -160,7 +160,7 @@ public interface DbAdapter extends Serializable {
 	 * Clean up states between the checkpoint and recovery timestamp.
 	 * 
 	 */
-	void cleanupFailedCheckpoints(String stateId, Connection con, long checkpointTimestamp,
+	void cleanupFailedCheckpoints(DbBackendConfig conf, String stateId, Connection con, long checkpointTimestamp,
 			long recoveryTimestamp) throws SQLException;
 
 	/**
