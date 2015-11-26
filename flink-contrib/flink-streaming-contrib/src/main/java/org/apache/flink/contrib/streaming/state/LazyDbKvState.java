@@ -367,7 +367,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 					// We need to perform cleanup on all shards to be safe here
 					for (Connection c : stateBackend.getConnections().connections()) {
-						stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(kvStateId,
+						stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(
+								stateBackend.getConfiguration(), kvStateId,
 								c, checkpointTimestamp, recoveryTimestamp);
 					}
 
@@ -376,10 +377,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			}, stateBackend.getConfiguration().getMaxNumberOfSqlRetries(),
 					stateBackend.getConfiguration().getSleepBetweenSqlRetries());
 
-			boolean cleanup = stateBackend.getEnvironment().getTaskInfo().getIndexOfThisSubtask() == 0;
+			boolean compactor = stateBackend.getEnvironment().getTaskInfo().getIndexOfThisSubtask() == 0;
 
 			// Restore the KvState
-			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, cleanup,
+			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, compactor,
 					stateBackend.getConnections(), stateBackend.getConfiguration(), keySerializer, valueSerializer,
 					defaultValue, recoveryTimestamp, lastCompactedTimestamp);
 
@@ -477,10 +478,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 								? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
 					}
 				}, numSqlRetries, sqlRetrySleep);
-			} catch (IOException e) {
+			} catch (Exception e) {
 				// We need to re-throw this exception to conform to the map
 				// interface, we will catch this when we call the the put/get
-				throw new RuntimeException(e);
+				throw new RuntimeException("Could not get state for key: " + key + " from the database.", e);
 			}
 		}
 
@@ -511,6 +512,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 					}
 
 					batchInsert.flush(nextTs);
+					// We increment the next ts so we avoid overwriting the
+					// values in the database (this allows more efficient
+					// inserts and we will compact later anyways)
+					nextTs++;
 
 				} catch (IOException e) {
 					// We need to re-throw this exception to conform to the map
@@ -570,11 +575,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 			// If partition is full write to the database and clear
 			if (insertPartition.size() == maxInsertBatchSize) {
-				dbAdapter.insertBatch(kvStateId, conf,
-						connections.getForIndex(shardIndex),
-						insertStatements.getForIndex(shardIndex),
-						timestamp, insertPartition);
-
+				executeInsert(insertPartition, shardIndex, timestamp);
 				insertPartition.clear();
 			}
 		}
@@ -584,12 +585,43 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			for (int i = 0; i < inserts.length; i++) {
 				List<Tuple2<byte[], byte[]>> insertPartition = inserts[i];
 				if (!insertPartition.isEmpty()) {
-					dbAdapter.insertBatch(kvStateId, conf, connections.getForIndex(i),
-							insertStatements.getForIndex(i), timestamp, insertPartition);
+					executeInsert(insertPartition, i, timestamp);
 					insertPartition.clear();
 				}
 			}
 
+		}
+
+		private void executeInsert(List<Tuple2<byte[], byte[]>> kvPairs, int shardIndex, long timestamp)
+				throws IOException {
+
+			// Used for debugging purposes
+			Long startTime = null;
+			if (LOG.isDebugEnabled()) {
+				startTime = System.nanoTime();
+				LOG.debug("Executing batch state insert for {} shard {} with {} records", kvStateId,
+						conf.getShardUrl(shardIndex), kvPairs.size());
+			}
+
+			dbAdapter.insertBatch(kvStateId, conf, connections.getForIndex(shardIndex),
+					insertStatements.getForIndex(shardIndex), timestamp, kvPairs);
+
+			if (LOG.isDebugEnabled()) {
+				long insertTime = (System.nanoTime() - startTime) / 1000000;
+				long keySize = 0L;
+				long valueSize = 0L;
+				for (Tuple2<byte[], byte[]> t : kvPairs) {
+					keySize += t.f0.length;
+					valueSize += t.f1.length;
+				}
+				keySize = keySize / 1024;
+				valueSize = valueSize / 1024;
+				LOG.debug(
+						"Successfully inserted state batch (insertTime(ms), numRecords, totKeySize(kb), totValueSize(kb), stateName, shardUrl, sql): "
+								+ "({},{},{},{},{},{},{})",
+						insertTime, kvPairs.size(), keySize, valueSize, kvStateId, conf.getShardUrl(shardIndex),
+						insertStatements.getSqlString());
+			}
 		}
 	}
 
@@ -607,6 +639,13 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			// interfere with the checkpointing (connections are not thread
 			// safe)
 			try (ShardedConnection sc = conf.createShardedConnection()) {
+
+				LOG.info("Starting compaction for {} between {} and {}.", kvStateId,
+						lastCompactedTs,
+						upperBound);
+
+				long compactionStart = System.nanoTime();
+
 				for (final Connection c : sc.connections()) {
 					SQLRetrier.retry(new Callable<Void>() {
 						@Override
@@ -616,11 +655,12 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 						}
 					}, numSqlRetries, sqlRetrySleep);
 				}
-				if (LOG.isInfoEnabled()) {
-					LOG.info("State succesfully compacted for {} between {} and {}.", kvStateId,
-							lastCompactedTs,
-							upperBound);
-				}
+
+				LOG.info("State succesfully compacted for {} between {} and {} in {} ms.", kvStateId,
+						lastCompactedTs,
+						upperBound,
+						(System.nanoTime() - compactionStart) / 1000000);
+
 				lastCompactedTs = upperBound;
 			} catch (SQLException | IOException e) {
 				LOG.warn("State compaction failed due: {}", e);
