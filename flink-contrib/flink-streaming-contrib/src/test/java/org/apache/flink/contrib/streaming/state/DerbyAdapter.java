@@ -22,7 +22,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Types;
 import java.util.List;
 import java.util.concurrent.Callable;
 
@@ -135,7 +134,7 @@ public class DerbyAdapter extends MySqlAdapter {
 			public Void call() throws Exception {
 				con.setAutoCommit(false);
 				for (Tuple2<byte[], byte[]> kv : toInsert) {
-					setKVInsertParams(stateId, insertStatement, checkpointTs, kv.f0, kv.f1);
+					setKvInsertParams(stateId, insertStatement, checkpointTs, kv.f0, kv.f1);
 					insertStatement.addBatch();
 				}
 				insertStatement.executeBatch();
@@ -153,14 +152,16 @@ public class DerbyAdapter extends MySqlAdapter {
 		}, conf.getMaxNumberOfSqlRetries(), conf.getSleepBetweenSqlRetries());
 	}
 
-	private void setKVInsertParams(String stateId, PreparedStatement insertStatement, long checkpointId,
-			byte[] key, byte[] value) throws SQLException {
-		insertStatement.setLong(1, checkpointId);
-		insertStatement.setBytes(2, key);
-		if (value != null) {
-			insertStatement.setBytes(3, value);
-		} else {
-			insertStatement.setNull(3, Types.BLOB);
+	@Override
+	public void cleanupFailedCheckpoints(DbBackendConfig conf, final String stateId, final Connection con,
+			final long checkpointTs,
+			final long recoveryTs) throws SQLException {
+		validateStateId(stateId);
+		try (Statement smt = con.createStatement()) {
+			smt.executeUpdate("DELETE FROM " + stateId
+					+ " WHERE timestamp > " + checkpointTs
+					+ " AND timestamp < " + recoveryTs);
 		}
 	}
+
 }
