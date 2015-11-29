@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 
@@ -40,24 +42,34 @@ public class MySqlAdapter implements DbAdapter {
 
 	private static final long serialVersionUID = 1L;
 
+	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
+
 	// -----------------------------------------------------------------------------
 	// Non-partitioned state checkpointing
 	// -----------------------------------------------------------------------------
 
 	@Override
 	public void createCheckpointsTable(String jobId, Connection con) throws SQLException {
-		try (Statement smt = con.createStatement()) {
-			smt.executeUpdate(
-					"CREATE TABLE IF NOT EXISTS checkpoints_" + jobId
-							+ " ("
-							+ "checkpointId bigint, "
-							+ "timestamp bigint, "
-							+ "handleId bigint,"
-							+ "checkpoint blob,"
-							+ "PRIMARY KEY (handleId)"
-							+ ")");
+		if (!isTableCreated(con, "checkpoints_" + jobId)) {
+			try (Statement smt = con.createStatement()) {
+				smt.executeUpdate(
+						"CREATE TABLE IF NOT EXISTS checkpoints_" + jobId
+								+ " ("
+								+ "checkpointId bigint, "
+								+ "timestamp bigint, "
+								+ "handleId bigint,"
+								+ "checkpoint blob,"
+								+ "PRIMARY KEY (handleId)"
+								+ ")");
+			}
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("Checkpoints table created for {}", jobId);
+			}
+		} else {
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("Checkpoints table alredy created for {}", jobId);
+			}
 		}
-
 	}
 
 	@Override
@@ -116,23 +128,31 @@ public class MySqlAdapter implements DbAdapter {
 	@Override
 	public void createKVStateTable(String stateId, Connection con) throws SQLException {
 		validateStateId(stateId);
-		try (Statement smt = con.createStatement()) {
-			smt.executeUpdate(
-					"CREATE TABLE IF NOT EXISTS " + stateId
-							+ " ("
-							+ "timestamp bigint, "
-							+ "k varbinary(256), "
-							+ "v blob, "
-							+ "PRIMARY KEY (k, timestamp) "
-							+ ")");
+		if (!isTableCreated(con, stateId)) {
+			try (Statement smt = con.createStatement()) {
+				smt.executeUpdate(
+						"CREATE TABLE IF NOT EXISTS " + stateId
+								+ " ("
+								+ "timestamp bigint, "
+								+ "k varbinary(256), "
+								+ "v blob, "
+								+ "PRIMARY KEY (k, timestamp) "
+								+ ")");
+			}
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("KV checkpoint table created for {}", stateId);
+			}
+		} else {
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("KV checkpoint table already created for {}", stateId);
+			}
 		}
 	}
 
 	@Override
 	public String prepareKVCheckpointInsert(String stateId) throws SQLException {
 		validateStateId(stateId);
-		return "INSERT INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?) "
-				+ "ON DUPLICATE KEY UPDATE v=? ";
+		return "REPLACE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)";
 	}
 
 	@Override
@@ -212,6 +232,9 @@ public class MySqlAdapter implements DbAdapter {
 				}
 				insertStatement.executeBatch();
 				insertStatement.clearBatch();
+				if (LOG.isDebugEnabled()) {
+					LOG.debug("Succesfully inserted {} values for {}", toInsert.size(), stateId);
+				}
 				return null;
 			}
 		}, new Callable<Void>() {
@@ -228,18 +251,19 @@ public class MySqlAdapter implements DbAdapter {
 		insertStatement.setBytes(2, key);
 		if (value != null) {
 			insertStatement.setBytes(3, value);
-			insertStatement.setBytes(4, value);
 		} else {
 			insertStatement.setNull(3, Types.BLOB);
-			insertStatement.setNull(4, Types.BLOB);
 		}
 	}
-	
+
 	@Override
 	public void keepAlive(Connection con) throws SQLException {
-		try(Statement smt = con.createStatement()) {
+		try (Statement smt = con.createStatement()) {
 			smt.executeQuery("SELECT 1");
 		}
 	}
 
+	private boolean isTableCreated(Connection con, String tableName) throws SQLException {
+		return con.getMetaData().getTables(null, null, tableName, null).next();
+	}
 }
