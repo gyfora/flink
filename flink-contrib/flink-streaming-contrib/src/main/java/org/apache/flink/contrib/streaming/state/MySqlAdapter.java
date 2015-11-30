@@ -50,6 +50,7 @@ public class MySqlAdapter implements DbAdapter {
 
 	@Override
 	public void createCheckpointsTable(String jobId, Connection con) throws SQLException {
+		con.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
 		if (!isTableCreated(con, "checkpoints_" + jobId)) {
 			try (Statement smt = con.createStatement()) {
 				smt.executeUpdate(
@@ -127,6 +128,7 @@ public class MySqlAdapter implements DbAdapter {
 
 	@Override
 	public void createKVStateTable(String stateId, Connection con) throws SQLException {
+		con.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
 		validateStateId(stateId);
 		if (!isTableCreated(con, stateId)) {
 			try (Statement smt = con.createStatement()) {
@@ -152,7 +154,8 @@ public class MySqlAdapter implements DbAdapter {
 	@Override
 	public String prepareKVCheckpointInsert(String stateId) throws SQLException {
 		validateStateId(stateId);
-		return "REPLACE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)";
+		return "INSERT INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?) "
+				+ "ON DUPLICATE KEY UPDATE v=? ";
 	}
 
 	@Override
@@ -251,8 +254,10 @@ public class MySqlAdapter implements DbAdapter {
 		insertStatement.setBytes(2, key);
 		if (value != null) {
 			insertStatement.setBytes(3, value);
+			insertStatement.setBytes(4, value);
 		} else {
 			insertStatement.setNull(3, Types.BLOB);
+			insertStatement.setNull(4, Types.BLOB);
 		}
 	}
 
