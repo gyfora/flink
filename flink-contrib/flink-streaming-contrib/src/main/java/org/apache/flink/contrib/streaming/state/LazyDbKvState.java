@@ -497,13 +497,16 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 						// We only need to write to the database if modified
 						if (modified.remove(next.getKey()) != null) {
-							batchInsert.add(next, nextTs + 1);
+							batchInsert.add(next, nextTs);
 						}
 
 						entryIterator.remove();
 					}
 
-					batchInsert.flush(nextTs + 1);
+					batchInsert.flush(nextTs);
+					// We increment the next ts so we avoid overwriting the
+					// values in the database (this allows more efficient
+					// inserts and we will compact later anyways)
 					nextTs++;
 
 				} catch (IOException e) {

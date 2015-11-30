@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 
@@ -40,24 +42,34 @@ public class MySqlAdapter implements DbAdapter {
 
 	private static final long serialVersionUID = 1L;
 
+	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
+
 	// -----------------------------------------------------------------------------
 	// Non-partitioned state checkpointing
 	// -----------------------------------------------------------------------------
 
 	@Override
 	public void createCheckpointsTable(String jobId, Connection con) throws SQLException {
-		try (Statement smt = con.createStatement()) {
-			smt.executeUpdate(
-					"CREATE TABLE IF NOT EXISTS checkpoints_" + jobId
-							+ " ("
-							+ "checkpointId bigint, "
-							+ "timestamp bigint, "
-							+ "handleId bigint,"
-							+ "checkpoint blob,"
-							+ "PRIMARY KEY (handleId)"
-							+ ")");
+		if (!isTableCreated(con, "checkpoints_" + jobId)) {
+			try (Statement smt = con.createStatement()) {
+				smt.executeUpdate(
+						"CREATE TABLE IF NOT EXISTS checkpoints_" + jobId
+								+ " ("
+								+ "checkpointId bigint, "
+								+ "timestamp bigint, "
+								+ "handleId bigint,"
+								+ "checkpoint blob,"
+								+ "PRIMARY KEY (handleId)"
+								+ ")");
+			}
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("Checkpoints table created for {}", jobId);
+			}
+		} else {
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("Checkpoints table alredy created for {}", jobId);
+			}
 		}
-
 	}
 
 	@Override
@@ -115,24 +127,33 @@ public class MySqlAdapter implements DbAdapter {
 
 	@Override
 	public void createKVStateTable(String stateId, Connection con) throws SQLException {
-		validateStateId(stateId);
 		con.setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
-		try (Statement smt = con.createStatement()) {
-			smt.executeUpdate(
-					"CREATE TABLE IF NOT EXISTS " + stateId
-							+ " ("
-							+ "timestamp bigint, "
-							+ "k varbinary(256), "
-							+ "v blob, "
-							+ "PRIMARY KEY (k, timestamp) "
-							+ ")");
+		validateStateId(stateId);
+		if (!isTableCreated(con, stateId)) {
+			try (Statement smt = con.createStatement()) {
+				smt.executeUpdate(
+						"CREATE TABLE IF NOT EXISTS " + stateId
+								+ " ("
+								+ "timestamp bigint, "
+								+ "k varbinary(256), "
+								+ "v blob, "
+								+ "PRIMARY KEY (k, timestamp) "
+								+ ")");
+			}
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("KV checkpoint table created for {}", stateId);
+			}
+		} else {
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("KV checkpoint table already created for {}", stateId);
+			}
 		}
 	}
 
 	@Override
 	public String prepareKVCheckpointInsert(String stateId) throws SQLException {
 		validateStateId(stateId);
-		return "INSERT INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)";
+		return "INSERT IGNORE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)";
 	}
 
 	@Override
@@ -206,21 +227,15 @@ public class MySqlAdapter implements DbAdapter {
 
 		SQLRetrier.retry(new Callable<Void>() {
 			public Void call() throws Exception {
-				con.setAutoCommit(false);
 				for (Tuple2<byte[], byte[]> kv : toInsert) {
 					setKvInsertParams(stateId, insertStatement, checkpointTs, kv.f0, kv.f1);
 					insertStatement.addBatch();
 				}
 				insertStatement.executeBatch();
-				con.commit();
-				con.setAutoCommit(true);
 				insertStatement.clearBatch();
-				return null;
-			}
-		}, new Callable<Void>() {
-			public Void call() throws Exception {
-				con.rollback();
-				insertStatement.clearBatch();
+				if (LOG.isDebugEnabled()) {
+					LOG.debug("Succesfully inserted {} values for {}", toInsert.size(), stateId);
+				}
 				return null;
 			}
 		}, conf.getMaxNumberOfSqlRetries(), conf.getSleepBetweenSqlRetries());
@@ -242,6 +257,10 @@ public class MySqlAdapter implements DbAdapter {
 		try (Statement smt = con.createStatement()) {
 			smt.executeQuery("SELECT 1");
 		}
+	}
+
+	private boolean isTableCreated(Connection con, String tableName) throws SQLException {
+		return con.getMetaData().getTables(null, null, tableName, null).next();
 	}
 
 }
