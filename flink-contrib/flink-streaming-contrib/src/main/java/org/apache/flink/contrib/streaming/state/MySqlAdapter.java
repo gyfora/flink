@@ -24,12 +24,17 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import java.util.concurrent.Callable;
 
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.hadoop.shaded.com.google.common.primitives.Longs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Optional;
 
 /**
  * 
@@ -43,6 +48,8 @@ public class MySqlAdapter implements DbAdapter {
 	private static final long serialVersionUID = 1L;
 
 	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
+
+	private static final byte[] MARKER_KEY = new byte[0];
 
 	// -----------------------------------------------------------------------------
 	// Non-partitioned state checkpointing
@@ -62,13 +69,9 @@ public class MySqlAdapter implements DbAdapter {
 								+ "PRIMARY KEY (handleId)"
 								+ ")");
 			}
-			if (LOG.isDebugEnabled()) {
-				LOG.debug("Checkpoints table created for {}", jobId);
-			}
+			LOG.debug("Checkpoints table created for {}", jobId);
 		} else {
-			if (LOG.isDebugEnabled()) {
-				LOG.debug("Checkpoints table alredy created for {}", jobId);
-			}
+			LOG.debug("Checkpoints table alredy created for {}", jobId);
 		}
 	}
 
@@ -140,13 +143,9 @@ public class MySqlAdapter implements DbAdapter {
 								+ "PRIMARY KEY (k, timestamp) "
 								+ ")");
 			}
-			if (LOG.isDebugEnabled()) {
-				LOG.debug("KV checkpoint table created for {}", stateId);
-			}
+			LOG.debug("KV checkpoint table created for {}", stateId);
 		} else {
-			if (LOG.isDebugEnabled()) {
-				LOG.debug("KV checkpoint table already created for {}", stateId);
-			}
+			LOG.debug("KV checkpoint table already created for {}", stateId);
 		}
 	}
 
@@ -182,14 +181,125 @@ public class MySqlAdapter implements DbAdapter {
 	}
 
 	@Override
-	public void cleanupFailedCheckpoints(String stateId, Connection con, long checkpointTs,
-			long recoveryTs) throws SQLException {
+	public void cleanupFailedCheckpoints(DbBackendConfig conf, final String stateId, final Connection con,
+			final long checkpointTs,
+			final long recoveryTs) throws SQLException {
+
 		validateStateId(stateId);
-		try (Statement smt = con.createStatement()) {
-			smt.executeUpdate("DELETE FROM " + stateId
-					+ " WHERE timestamp > " + checkpointTs
-					+ " AND timestamp < " + recoveryTs);
+		try {
+			if (shouldCleanup(conf, stateId, con, recoveryTs)) {
+				LOG.debug("Task selected for cleanup, cleaning " + stateId);
+				SQLRetrier.retry(new Callable<Void>() {
+
+					@Override
+					public Void call() throws Exception {
+						try (Statement smt = con.createStatement()) {
+							smt.executeUpdate("DELETE FROM " + stateId
+									+ " WHERE timestamp > " + checkpointTs
+									+ " AND timestamp < " + recoveryTs);
+						}
+						return null;
+					}
+				}, conf.getMaxNumberOfSqlRetries());
+
+				removeMarker(conf, stateId, con, recoveryTs);
+				LOG.debug("Cleanup performed successfully for " + stateId);
+			} else {
+				waitForCleanup(conf, stateId, con, recoveryTs);
+			}
+		} catch (IOException e) {
+			throw new RuntimeException("Could not clean up state", e);
 		}
+
+	}
+
+	private void waitForCleanup(DbBackendConfig conf, final String stateId, final Connection con, final long recoveryTs)
+			throws IOException {
+		int c = 0;
+		while (true) {
+			try {
+				if (!getMarker(conf, stateId, con, recoveryTs).isPresent()) {
+					break;
+				} else if (c > 30) {
+					throw new IOException("Could not clean up in 30 seconds.");
+				} else {
+					LOG.debug("Some other task is already cleaning, sleeping 1s...");
+					Thread.sleep(1000);
+				}
+			} catch (InterruptedException e) {
+				break;
+			}
+			c++;
+		}
+	}
+
+	private void removeMarker(DbBackendConfig conf, final String stateId, final Connection con, final long recoveryTs)
+			throws IOException {
+		SQLRetrier.retry(new Callable<Void>() {
+			@Override
+			public Void call() throws Exception {
+				try (PreparedStatement smt = con
+						.prepareStatement("DELETE FROM " + stateId
+								+ " WHERE timestamp = " + recoveryTs
+								+ " AND k = ? ")) {
+					smt.setBytes(1, MARKER_KEY);
+					smt.executeUpdate();
+				}
+				return null;
+			}
+		}, conf.getMaxNumberOfSqlRetries());
+	}
+
+	private boolean shouldCleanup(DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs) throws IOException {
+		Random rnd = new Random();
+		byte[] markerValue = Longs.toByteArray(rnd.nextLong());
+		Optional<byte[]> currentMarker = getMarker(conf, stateId, con, recoveryTs);
+
+		if (!currentMarker.isPresent()) {
+			mark(conf, stateId, con, recoveryTs, markerValue);
+		}
+
+		return Arrays.equals(markerValue, getMarker(conf, stateId, con, recoveryTs).get());
+	}
+
+	private void mark(final DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs, final byte[] marker) throws IOException {
+
+		SQLRetrier.retry(new Callable<Void>() {
+			@Override
+			public Void call() throws Exception {
+				try (PreparedStatement smt = con
+						.prepareStatement("INSERT IGNORE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)")) {
+					setKvInsertParams(stateId, smt, recoveryTs, MARKER_KEY, marker);
+					smt.executeUpdate();
+				}
+				return null;
+			}
+		}, conf.getMaxNumberOfSqlRetries());
+	}
+
+	private Optional<byte[]> getMarker(final DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs)
+					throws IOException {
+
+		return SQLRetrier.retry(new Callable<Optional<byte[]>>() {
+			@Override
+			public Optional<byte[]> call() throws Exception {
+				try (PreparedStatement smt = con.prepareStatement("SELECT v FROM " + stateId
+						+ " WHERE k = ? AND timestamp = " + recoveryTs)) {
+
+					smt.setBytes(1, MARKER_KEY);
+					ResultSet res = smt.executeQuery();
+
+					if (res.next()) {
+						return Optional.of(res.getBytes(1));
+					} else {
+						return Optional.absent();
+					}
+				}
+			}
+		}, conf.getMaxNumberOfSqlRetries());
 	}
 
 	@Override
@@ -260,7 +370,7 @@ public class MySqlAdapter implements DbAdapter {
 
 	}
 
-	private void setKvInsertParams(String stateId, PreparedStatement insertStatement, long checkpointTs,
+	protected void setKvInsertParams(String stateId, PreparedStatement insertStatement, long checkpointTs,
 			byte[] key, byte[] value) throws SQLException {
 		insertStatement.setLong(1, checkpointTs);
 		insertStatement.setBytes(2, key);

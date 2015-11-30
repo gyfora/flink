@@ -367,7 +367,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 					// We need to perform cleanup on all shards to be safe here
 					for (Connection c : stateBackend.getConnections().connections()) {
-						stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(kvStateId,
+						stateBackend.getConfiguration().getDbAdapter().cleanupFailedCheckpoints(
+								stateBackend.getConfiguration(), kvStateId,
 								c, checkpointTimestamp, recoveryTimestamp);
 					}
 
@@ -376,10 +377,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			}, stateBackend.getConfiguration().getMaxNumberOfSqlRetries(),
 					stateBackend.getConfiguration().getSleepBetweenSqlRetries());
 
-			boolean cleanup = stateBackend.getEnvironment().getIndexInSubtaskGroup() == 0;
+			boolean compactor = stateBackend.getEnvironment().getIndexInSubtaskGroup() == 0;
 
 			// Restore the KvState
-			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, cleanup,
+			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, compactor,
 					stateBackend.getConnections(), stateBackend.getConfiguration(), keySerializer, valueSerializer,
 					defaultValue, recoveryTimestamp, lastCompactedTimestamp);
 
