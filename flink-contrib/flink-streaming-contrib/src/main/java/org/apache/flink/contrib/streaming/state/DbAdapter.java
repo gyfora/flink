@@ -170,7 +170,7 @@ public interface DbAdapter extends Serializable {
 	 * 
 	 */
 	void insertBatch(String stateId, DbBackendConfig conf, Connection con, PreparedStatement insertStatement,
-			long checkpointTimestamp, List<Tuple2<byte[], byte[]>> toInsert) throws IOException;
+			long checkpointTimestamp, List<Tuple2<byte[], byte[]>> toInsert, int partition) throws IOException;
 
 	/**
 	 * Compact the states between two checkpoint timestamp by only keeping the

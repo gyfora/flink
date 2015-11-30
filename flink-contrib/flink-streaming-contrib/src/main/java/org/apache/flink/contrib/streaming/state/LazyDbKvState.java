@@ -570,7 +570,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 				dbAdapter.insertBatch(kvStateId, conf,
 						connections.getForIndex(shardIndex),
 						insertStatements.getForIndex(shardIndex),
-						timestamp, insertPartition);
+						timestamp, insertPartition, shardIndex);
 
 				insertPartition.clear();
 			}
@@ -582,7 +582,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 				List<Tuple2<byte[], byte[]>> insertPartition = inserts[i];
 				if (!insertPartition.isEmpty()) {
 					dbAdapter.insertBatch(kvStateId, conf, connections.getForIndex(i),
-							insertStatements.getForIndex(i), timestamp, insertPartition);
+							insertStatements.getForIndex(i), timestamp, insertPartition, i);
 					insertPartition.clear();
 				}
 			}

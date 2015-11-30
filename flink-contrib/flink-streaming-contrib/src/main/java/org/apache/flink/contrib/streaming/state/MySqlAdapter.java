@@ -223,7 +223,22 @@ public class MySqlAdapter implements DbAdapter {
 	@Override
 	public void insertBatch(final String stateId, final DbBackendConfig conf,
 			final Connection con, final PreparedStatement insertStatement, final long checkpointTs,
-			final List<Tuple2<byte[], byte[]>> toInsert) throws IOException {
+			final List<Tuple2<byte[], byte[]>> toInsert, int partition) throws IOException {
+
+		Long start = null;
+		Long keySize = null;
+		Long valueSize = null;
+		if (LOG.isDebugEnabled()) {
+			start = System.nanoTime();
+			keySize = 0L;
+			valueSize = 0L;
+			for (Tuple2<byte[], byte[]> t : toInsert) {
+				keySize += t.f0.length;
+				valueSize += t.f1.length;
+			}
+			keySize = keySize / 1024;
+			valueSize = valueSize / 1024;
+		}
 
 		SQLRetrier.retry(new Callable<Void>() {
 			public Void call() throws Exception {
@@ -233,12 +248,16 @@ public class MySqlAdapter implements DbAdapter {
 				}
 				insertStatement.executeBatch();
 				insertStatement.clearBatch();
-				if (LOG.isDebugEnabled()) {
-					LOG.debug("Succesfully inserted {} values for {}", toInsert.size(), stateId);
-				}
 				return null;
 			}
 		}, conf.getMaxNumberOfSqlRetries(), conf.getSleepBetweenSqlRetries());
+
+		if (LOG.isDebugEnabled()) {
+			LOG.debug("Inserted {} in {} ms, Table: {}, TKS: {} KB TRS: {} KB", toInsert.size(),
+					(System.nanoTime() - start) / 1000000, stateId + "@" + conf.getShardUrl(partition), keySize,
+					valueSize);
+		}
+
 	}
 
 	private void setKvInsertParams(String stateId, PreparedStatement insertStatement, long checkpointTs,

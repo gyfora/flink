@@ -129,7 +129,7 @@ public class DerbyAdapter extends MySqlAdapter {
 	@Override
 	public void insertBatch(final String stateId, final DbBackendConfig conf,
 			final Connection con, final PreparedStatement insertStatement, final long checkpointTs,
-			final List<Tuple2<byte[], byte[]>> toInsert) throws IOException {
+			final List<Tuple2<byte[], byte[]>> toInsert, int p) throws IOException {
 
 		SQLRetrier.retry(new Callable<Void>() {
 			public Void call() throws Exception {
