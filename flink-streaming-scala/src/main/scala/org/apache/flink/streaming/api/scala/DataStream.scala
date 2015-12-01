@@ -105,6 +105,24 @@ class DataStream[T](javaStream: JavaStream[T]) {
     case _ => throw new UnsupportedOperationException("Only supported for operators.")
     this
   }
+
+  /**
+    * Sets an ID for this operator.
+    *
+    * The specified ID is used to assign the same operator ID across job
+    * submissions (for example when starting a job from a savepoint).
+    *
+    * <strong>Important</strong>: this ID needs to be unique per
+    * transformation and job. Otherwise, job submission will fail.
+    *
+    * @param uid The unique user-specified ID of this transformation.
+    * @return The operator with the specified ID.
+    */
+  def uid(uid: String) : DataStream[T] = javaStream match {
+    case stream : SingleOutputStreamOperator[T,_] => stream.uid(uid)
+    case _ => throw new UnsupportedOperationException("Only supported for operators.")
+    this
+  }
   
   /**
    * Turns off chaining for this operator so thread co-location will not be
