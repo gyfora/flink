@@ -24,17 +24,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Random;
 import java.util.concurrent.Callable;
 
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.hadoop.shaded.com.google.common.primitives.Longs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Optional;
 
 /**
  * 
@@ -49,7 +44,7 @@ public class MySqlAdapter implements DbAdapter {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
 
-	private static final byte[] MARKER_KEY = new byte[0];
+	private static final byte[] MARKER = new byte[0];
 
 	// -----------------------------------------------------------------------------
 	// Non-partitioned state checkpointing
@@ -181,13 +176,13 @@ public class MySqlAdapter implements DbAdapter {
 	}
 
 	@Override
-	public void cleanupFailedCheckpoints(DbBackendConfig conf, final String stateId, final Connection con,
+	public void cleanupFailedCheckpoints(final DbBackendConfig conf, final String stateId, final Connection con,
 			final long checkpointTs,
 			final long recoveryTs) throws SQLException {
 
 		validateStateId(stateId);
 		try {
-			if (shouldCleanup(conf, stateId, con, recoveryTs)) {
+			if (startCleanup(conf, stateId, con, recoveryTs)) {
 				LOG.debug("Task selected for cleanup, cleaning " + stateId);
 				SQLRetrier.retry(new Callable<Void>() {
 
@@ -198,11 +193,11 @@ public class MySqlAdapter implements DbAdapter {
 									+ " WHERE timestamp > " + checkpointTs
 									+ " AND timestamp < " + recoveryTs);
 						}
+						finishCleanup(conf, stateId, con, recoveryTs);
 						return null;
 					}
 				}, conf.getMaxNumberOfSqlRetries());
 
-				removeMarker(conf, stateId, con, recoveryTs);
 				LOG.debug("Cleanup performed successfully for " + stateId);
 			} else {
 				waitForCleanup(conf, stateId, con, recoveryTs);
@@ -216,62 +211,49 @@ public class MySqlAdapter implements DbAdapter {
 	private void waitForCleanup(DbBackendConfig conf, final String stateId, final Connection con, final long recoveryTs)
 			throws IOException {
 		int c = 0;
-		while (true) {
+		boolean wait = true;
+		while (wait) {
+			c++;
 			try {
-				if (!getMarker(conf, stateId, con, recoveryTs).isPresent()) {
-					break;
-				} else if (c > 30) {
+				if (isCleanupFinished(conf, stateId, con, recoveryTs)) {
+					wait = false;
+				} else if (c > 60) {
 					throw new IOException("Could not clean up in 30 seconds.");
 				} else {
-					LOG.debug("Some other task is already cleaning, sleeping 1s...");
-					Thread.sleep(1000);
+					LOG.debug("Some other task is already cleaning, sleeping...");
+					Thread.sleep(500);
 				}
 			} catch (InterruptedException e) {
-				break;
+				wait = false;
 			}
-			c++;
 		}
 	}
 
-	private void removeMarker(DbBackendConfig conf, final String stateId, final Connection con, final long recoveryTs)
-			throws IOException {
-		SQLRetrier.retry(new Callable<Void>() {
+	private boolean startCleanup(DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs)
+					throws IOException {
+		return SQLRetrier.retry(new Callable<Boolean>() {
 			@Override
-			public Void call() throws Exception {
-				try (PreparedStatement smt = con
-						.prepareStatement("DELETE FROM " + stateId
-								+ " WHERE timestamp = " + recoveryTs
-								+ " AND k = ? ")) {
-					smt.setBytes(1, MARKER_KEY);
-					smt.executeUpdate();
-				}
-				return null;
-			}
-		}, conf.getMaxNumberOfSqlRetries());
-	}
-
-	private boolean shouldCleanup(DbBackendConfig conf, final String stateId, final Connection con,
-			final long recoveryTs) throws IOException {
-		Random rnd = new Random();
-		byte[] markerValue = Longs.toByteArray(rnd.nextLong());
-		Optional<byte[]> currentMarker = getMarker(conf, stateId, con, recoveryTs);
-
-		if (!currentMarker.isPresent()) {
-			mark(conf, stateId, con, recoveryTs, markerValue);
-		}
-
-		return Arrays.equals(markerValue, getMarker(conf, stateId, con, recoveryTs).get());
-	}
-
-	private void mark(final DbBackendConfig conf, final String stateId, final Connection con,
-			final long recoveryTs, final byte[] marker) throws IOException {
-
-		SQLRetrier.retry(new Callable<Void>() {
-			@Override
-			public Void call() throws Exception {
+			public Boolean call() throws Exception {
 				try (PreparedStatement smt = con
 						.prepareStatement("INSERT IGNORE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)")) {
-					setKvInsertParams(stateId, smt, recoveryTs, MARKER_KEY, marker);
+					setKvInsertParams(stateId, smt, recoveryTs, MARKER, MARKER);
+					return smt.executeUpdate() == 1;
+				}
+			}
+		}, conf.getMaxNumberOfSqlRetries());
+	}
+
+	private void finishCleanup(final DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs) throws IOException {
+
+		SQLRetrier.retry(new Callable<Boolean>() {
+			@Override
+			public Boolean call() throws Exception {
+				try (PreparedStatement smt = con
+						.prepareStatement("UPDATE " + stateId + " SET v=? WHERE k=? AND timestamp=" + recoveryTs)) {
+					smt.setNull(1, Types.BLOB);
+					smt.setBytes(2, MARKER);
 					smt.executeUpdate();
 				}
 				return null;
@@ -279,23 +261,23 @@ public class MySqlAdapter implements DbAdapter {
 		}, conf.getMaxNumberOfSqlRetries());
 	}
 
-	private Optional<byte[]> getMarker(final DbBackendConfig conf, final String stateId, final Connection con,
+	private boolean isCleanupFinished(final DbBackendConfig conf, final String stateId, final Connection con,
 			final long recoveryTs)
 					throws IOException {
 
-		return SQLRetrier.retry(new Callable<Optional<byte[]>>() {
+		return SQLRetrier.retry(new Callable<Boolean>() {
 			@Override
-			public Optional<byte[]> call() throws Exception {
+			public Boolean call() throws Exception {
 				try (PreparedStatement smt = con.prepareStatement("SELECT v FROM " + stateId
 						+ " WHERE k = ? AND timestamp = " + recoveryTs)) {
 
-					smt.setBytes(1, MARKER_KEY);
+					smt.setBytes(1, MARKER);
 					ResultSet res = smt.executeQuery();
 
 					if (res.next()) {
-						return Optional.of(res.getBytes(1));
+						return res.getBytes(1) == null;
 					} else {
-						return Optional.absent();
+						throw new RuntimeException("Error in cleanup logic");
 					}
 				}
 			}
