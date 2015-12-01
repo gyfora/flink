@@ -22,17 +22,17 @@ import java.io.{File, IOException}
 import java.net.{UnknownHostException, InetAddress, InetSocketAddress}
 import java.util.UUID
 
-import akka.actor.Status.Failure
+import akka.actor.Status.{Success, Failure}
 import akka.actor._
 import akka.pattern.ask
 import grizzled.slf4j.Logger
-import org.apache.flink.api.common.{ExecutionConfig, JobID}
+import org.apache.flink.api.common.{ApplicationID, ExecutionConfig, JobID}
 import org.apache.flink.configuration.{ConfigConstants, Configuration, GlobalConfiguration}
 import org.apache.flink.core.io.InputSplitAssigner
 import org.apache.flink.runtime.accumulators.AccumulatorSnapshot
 import org.apache.flink.runtime.akka.{AkkaUtils, ListeningBehaviour}
 import org.apache.flink.runtime.blob.BlobServer
-import org.apache.flink.runtime.checkpoint.{CheckpointRecoveryFactory, StandaloneCheckpointRecoveryFactory, ZooKeeperCheckpointRecoveryFactory}
+import org.apache.flink.runtime.checkpoint._
 import org.apache.flink.runtime.client._
 import org.apache.flink.runtime.execution.librarycache.BlobLibraryCacheManager
 import org.apache.flink.runtime.executiongraph.{ExecutionGraph, ExecutionJobVertex}
@@ -66,7 +66,6 @@ import scala.concurrent._
 import scala.concurrent.duration._
 import scala.concurrent.forkjoin.ForkJoinPool
 import scala.language.postfixOps
-
 
 /**
  * The job manager is responsible for receiving Flink jobs, scheduling the tasks, gathering the
@@ -136,6 +135,9 @@ class JobManager(
   val webMonitorPort : Int = flinkConfiguration.getInteger(
     ConfigConstants.JOB_MANAGER_WEB_PORT_KEY, -1)
 
+  protected val savepointStore : SavepointStore =
+    SavepointStoreFactory.createFromConfig(flinkConfiguration)
+
   /**
    * Run when the job manager is started. Simply logs an informational message.
    * The method also starts the leader election service.
@@ -167,6 +169,14 @@ class JobManager(
         log.error("Could not start the checkpoint recovery service.", e)
         throw new RuntimeException("Could not start the checkpoint recovery service.", e)
     }
+
+    try {
+      savepointStore.start()
+    } catch {
+      case e: Exception =>
+        log.error("Could not start the savepoint store.", e)
+        throw new RuntimeException("Could not start the  savepoint store store.", e)
+    }
   }
 
   override def postStop(): Unit = {
@@ -188,6 +198,14 @@ class JobManager(
       _.getActorGateway().tell(
         Disconnect("JobManager is shutting down"),
         new AkkaActorGateway(self, leaderSessionID.orNull))
+    }
+
+    try {
+      savepointStore.stop()
+    } catch {
+      case e: Exception =>
+        log.error("Could not stop the savepoint store.", e)
+        throw new RuntimeException("Could not stop the  savepoint store store.", e)
     }
 
     try {
@@ -335,7 +353,7 @@ class JobManager(
       val client = sender()
 
       val jobInfo = new JobInfo(client, listeningBehaviour, System.currentTimeMillis(),
-        jobGraph.getSessionTimeout)
+            jobGraph.getSessionTimeout)
 
       submitJob(jobGraph, jobInfo)
 
@@ -501,6 +519,76 @@ class JobManager(
 
     case checkpointMessage : AbstractCheckpointMessage =>
       handleCheckpointMessage(checkpointMessage)
+
+    case TriggerSavepoint(jobId) =>
+      currentJobs.get(jobId) match {
+        case Some((graph, _)) =>
+          val savepointCoordinator = graph.getSavepointCoordinator()
+
+          if (savepointCoordinator != null) {
+            // Immutable copy for the future
+            val senderRef = sender()
+
+            future {
+              try {
+                // Do this async, because checkpoint coordinator operations can
+                // contain blocking calls to the state backend or ZooKeeper.
+                val savepointFuture = savepointCoordinator.triggerSavepoint(
+                  System.currentTimeMillis())
+
+                savepointFuture.onComplete {
+                  // Success, respond with the savepoint path
+                  case scala.util.Success(savepointPath) =>
+                    senderRef ! TriggerSavepointSuccess(jobId, savepointPath)
+
+                  // Failure, respond with the cause
+                  case scala.util.Failure(t) =>
+                    senderRef ! TriggerSavepointFailure(jobId,
+                      new Exception("Failed to complete savepoint", t))
+                }(context.dispatcher)
+              }
+              catch {
+                case e: Exception =>
+                  senderRef ! TriggerSavepointFailure(jobId, new Exception(
+                    "Failed to trigger savepoint", e))
+              }
+            }(context.dispatcher)
+          }
+          else {
+            sender() ! TriggerSavepointFailure(jobId, new IllegalStateException(
+              "Checkpointing disabled. You can enable it via the execution environment of " +
+                "your job."))
+          }
+
+        case None =>
+          sender() ! TriggerSavepointFailure(jobId, new IllegalArgumentException("Unknown job."))
+      }
+
+    case DisposeSavepoint(savepointPath) =>
+      val senderRef = sender()
+      future {
+        try {
+          log.info(s"Disposing savepoint at '$savepointPath'.")
+
+          val savepoint = savepointStore.getState(savepointPath)
+
+          log.debug(s"$savepoint")
+
+          // Discard the associated checkpoint
+          savepoint.getCompletedCheckpoint.discard(getClass.getClassLoader)
+
+          // Dispose the savepoint
+          savepointStore.disposeState(savepointPath)
+
+          senderRef ! DisposeSavepointSuccess
+        }
+        catch {
+          case t: Throwable =>
+            log.error(s"Failed to dispose savepoint at '$savepointPath'.", t)
+
+            senderRef ! DisposeSavepointFailure(t)
+        }
+      }(context.dispatcher)
 
     case JobStatusChanged(jobID, newJobStatus, timeStamp, error) =>
       currentJobs.get(jobID) match {
@@ -760,7 +848,11 @@ class JobManager(
    * @param jobInfo the job info
    * @param isRecovery Flag indicating whether this is a recovery or initial submission
    */
-  private def submitJob(jobGraph: JobGraph, jobInfo: JobInfo, isRecovery: Boolean = false): Unit = {
+  private def submitJob(
+    jobGraph: JobGraph,
+    jobInfo: JobInfo,
+    isRecovery: Boolean = false): Unit = {
+
     if (jobGraph == null) {
       jobInfo.client ! decorateMessage(JobResultFailure(
         new SerializedThrowable(
@@ -929,7 +1021,8 @@ class JobManager(
             leaderSessionID.orNull,
             checkpointIdCounter,
             completedCheckpoints,
-            recoveryMode)
+            recoveryMode,
+            savepointStore)
         }
 
         // get notified about job status changes
@@ -973,6 +1066,16 @@ class JobManager(
             executionGraph.restoreLatestCheckpointedState()
           }
           else {
+            val snapshotSettings = jobGraph.getSnapshotSettings
+            if (snapshotSettings != null) {
+              val savepointPath = snapshotSettings.getSavepointPath()
+
+              // Reset state back to savepoint
+              if (savepointPath != null) {
+                executionGraph.restoreSavepoint(savepointPath)
+              }
+            }
+
             submittedJobGraphs.putJobGraph(new SubmittedJobGraph(jobGraph, jobInfo))
           }
 
@@ -1021,11 +1124,23 @@ class JobManager(
         val jid = ackMessage.getJob()
         currentJobs.get(jid) match {
           case Some((graph, _)) =>
-            val coordinator = graph.getCheckpointCoordinator()
-            if (coordinator != null) {
+            val checkpointCoordinator = graph.getCheckpointCoordinator()
+            val savepointCoordinator = graph.getSavepointCoordinator()
+
+            if (checkpointCoordinator != null && savepointCoordinator != null) {
               future {
                 try {
-                  coordinator.receiveAcknowledgeMessage(ackMessage)
+                  if (checkpointCoordinator.receiveAcknowledgeMessage(ackMessage)) {
+                    // OK, this is the common case
+                  }
+                  else {
+                    // Try the savepoint coordinator if the message was not addressed
+                    // to the periodic checkpoint coordinator.
+                    if (!savepointCoordinator.receiveAcknowledgeMessage(ackMessage)) {
+                      log.info("Received message for non-existing checkpoint " +
+                        ackMessage.getCheckpointId)
+                    }
+                  }
                 }
                 catch {
                   case t: Throwable =>
@@ -1037,7 +1152,7 @@ class JobManager(
               log.error(
                 s"Received ConfirmCheckpoint message for job $jid with no CheckpointCoordinator")
             }
-            
+
           case None => log.error(s"Received ConfirmCheckpoint for unavailable job $jid")
         }
 
