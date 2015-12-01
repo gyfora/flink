@@ -467,8 +467,15 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 						byte[] serializedVal = dbAdapter.lookupKey(kvStateId,
 								selectStatements.getForKey(key), serializedKey, nextTs);
 
-						return serializedVal != null
-								? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
+						try {
+							V ret = serializedVal != null
+									? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
+							return ret;
+						} catch (IOException e) {
+							LOG.debug("Deserialization error. Key: {} ({}), Bytes: {} ", key, serializedKey,
+									serializedVal);
+							return null;
+						}
 					}
 				}, numSqlRetries, sqlRetrySleep);
 			} catch (IOException e) {
