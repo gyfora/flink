@@ -474,7 +474,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			} catch (IOException e) {
 				// We need to re-throw this exception to conform to the map
 				// interface, we will catch this when we call the the put/get
-				throw new RuntimeException(e);
+				throw new RuntimeException("Could not get state for key: " + key + " from the database.", e);
 			}
 		}
 

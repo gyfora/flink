@@ -45,8 +45,24 @@ public class MySqlAdapter implements DbAdapter {
 	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
 
 	private static final byte[] CLEANUP_MARKER = new byte[0];
-	private static long SLEEP_BETWEEN_CLEANUP_CHECKS = 3000;
-	private static long MAX_WAIT_FOR_CLEANUP = 5 * 60 * 1000;
+	private final long SLEEP_BETWEEN_CLEANUP_CHECKS = 3000;
+	private final long maxWaitForCleanup;
+
+	/**
+	 * Creates a new MySqlAdapter with the default parameters
+	 */
+	public MySqlAdapter() {
+		this(120000);
+	}
+
+	/**
+	 * Creates a new MySqlAdapter with the given maximum wait time for state
+	 * cleanup. Increasing this parameter might help with cleanup timeouts on
+	 * large state sizes.
+	 */
+	public MySqlAdapter(long maxWaitForCleanup) {
+		this.maxWaitForCleanup = maxWaitForCleanup;
+	}
 
 	// -----------------------------------------------------------------------------
 	// Non-partitioned state checkpointing
@@ -180,13 +196,12 @@ public class MySqlAdapter implements DbAdapter {
 
 	@Override
 	public void cleanupFailedCheckpoints(final DbBackendConfig conf, final String stateId, final Connection con,
-			final long checkpointTs,
-			final long recoveryTs) throws SQLException {
+			final long checkpointTs, final long recoveryTs) throws SQLException {
 
 		try {
 			if (startCleanup(conf, stateId, con, recoveryTs)) {
 				// Only one task should succeed here
-				LOG.debug("Task selected for cleanup, cleaning " + stateId);
+				LOG.debug("Removing failed state updates for " + stateId);
 
 				// Execute the cleanup and mark finished (this should be retried
 				// if it fails for some reason)
@@ -205,13 +220,14 @@ public class MySqlAdapter implements DbAdapter {
 
 				LOG.debug("Cleanup performed successfully for " + stateId);
 			} else {
+				LOG.debug("Cleanup is performed at another task for " + stateId);
 				// We need to wait until the cleanup task finishes
 				waitForCleanup(conf, stateId, con, recoveryTs);
 			}
 		} catch (IOException e) {
 			// We don't want to propagate any exceptions here as that would just
 			// cause the state to retrty cleanup
-			throw new RuntimeException("Could not clean up state", e);
+			throw new RuntimeException("Could not clean up failed state", e);
 		}
 	}
 
@@ -303,8 +319,9 @@ public class MySqlAdapter implements DbAdapter {
 					LOG.debug("Some other task is already cleaning, sleeping...");
 					Thread.sleep(SLEEP_BETWEEN_CLEANUP_CHECKS);
 					slept += SLEEP_BETWEEN_CLEANUP_CHECKS;
-					if (slept >= MAX_WAIT_FOR_CLEANUP) {
-						throw new IOException("Could not clean up in " + MAX_WAIT_FOR_CLEANUP / 1000 + " seconds.");
+					if (slept >= maxWaitForCleanup) {
+						throw new IOException(
+								"Clean up did not finish in " + maxWaitForCleanup / 1000 + " seconds.");
 					}
 				}
 			} catch (InterruptedException e) {
