@@ -99,7 +99,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
  *         about deployment of tasks and updates in the task status always use the ExecutionAttemptID to
  *         address the message receiver.</li>
  * </ul>
- * 
+ *
  * <p>The ExecutionGraph implements {@link java.io.Serializable}, because it can be archived by
  * sending it to an archive actor via an actor message. The execution graph does contain some
  * non-serializable fields. These fields are not required in the archived form and are cleared
@@ -114,7 +114,7 @@ public class ExecutionGraph implements Serializable {
 
 	/** The log object used for debugging. */
 	static final Logger LOG = LoggerFactory.getLogger(ExecutionGraph.class);
-	
+
 	// --------------------------------------------------------------------------------------------
 
 	/** The lock used to secure all access to mutable fields, especially the tracking of progress
@@ -212,10 +212,13 @@ public class ExecutionGraph implements Serializable {
 	/** The classloader for the user code. Needed for calls into user code classes */
 	@SuppressWarnings("NonSerializableFieldInSerializableClass")
 	private ClassLoader userClassLoader;
-	
+
 	/** The coordinator for checkpoints, if snapshot checkpoints are enabled */
 	@SuppressWarnings("NonSerializableFieldInSerializableClass")
 	private CheckpointCoordinator checkpointCoordinator;
+
+	/** The coordinator for savepoints, if snapshot checkpoints are enabled */
+	private transient SavepointCoordinator savepointCoordinator;
 
 	/** The execution context which is used to execute futures. */
 	@SuppressWarnings("NonSerializableFieldInSerializableClass")
@@ -286,7 +289,7 @@ public class ExecutionGraph implements Serializable {
 	}
 
 	// --------------------------------------------------------------------------------------------
-	//  Configuration of Data-flow wide execution settings  
+	//  Configuration of Data-flow wide execution settings
 	// --------------------------------------------------------------------------------------------
 
 	/**
@@ -296,7 +299,7 @@ public class ExecutionGraph implements Serializable {
 	public int getNumberOfExecutionJobVertices() {
 		return this.verticesInCreationOrder.size();
 	}
-	
+
 	public void setNumberOfRetriesLeft(int numberOfRetriesLeft) {
 		if (numberOfRetriesLeft < -1) {
 			throw new IllegalArgumentException();
@@ -338,7 +341,7 @@ public class ExecutionGraph implements Serializable {
 	public boolean isArchived() {
 		return isArchived;
 	}
-	
+
 	public void enableSnapshotCheckpointing(
 			long interval,
 			long checkpointTimeout,
@@ -351,7 +354,8 @@ public class ExecutionGraph implements Serializable {
 			UUID leaderSessionID,
 			CheckpointIDCounter checkpointIDCounter,
 			CompletedCheckpointStore completedCheckpointStore,
-			RecoveryMode recoveryMode) throws Exception {
+			RecoveryMode recoveryMode,
+			StateStore<Savepoint> savepointStore) throws Exception {
 
 		// simple sanity checks
 		if (interval < 10 || checkpointTimeout < 10) {
@@ -364,10 +368,10 @@ public class ExecutionGraph implements Serializable {
 		ExecutionVertex[] tasksToTrigger = collectExecutionVertices(verticesToTrigger);
 		ExecutionVertex[] tasksToWaitFor = collectExecutionVertices(verticesToWaitFor);
 		ExecutionVertex[] tasksToCommitTo = collectExecutionVertices(verticesToCommitTo);
-		
+
 		// disable to make sure existing checkpoint coordinators are cleared
 		disableSnaphotCheckpointing();
-		
+
 		// create the coordinator that triggers and commits checkpoints and holds the state
 		checkpointCoordinator = new CheckpointCoordinator(
 				jobID,
@@ -387,6 +391,23 @@ public class ExecutionGraph implements Serializable {
 		// job status changes (running -> on, all other states -> off)
 		registerJobStatusListener(checkpointCoordinator
 				.createActivatorDeactivator(actorSystem, leaderSessionID));
+
+		savepointCoordinator = new SavepointCoordinator(
+				appId,
+				jobID,
+				interval,
+				checkpointTimeout,
+				tasksToTrigger,
+				tasksToWaitFor,
+				tasksToCommitTo,
+				userClassLoader,
+				// Important: this counter needs to be shared with the periodic
+				// checkpoint coordinator.
+				checkpointIDCounter,
+				savepointStore);
+
+		registerJobStatusListener(savepointCoordinator
+				.createActivatorDeactivator(actorSystem, leaderSessionID));
 	}
 
 	/**
@@ -399,15 +420,24 @@ public class ExecutionGraph implements Serializable {
 		if (state != JobStatus.CREATED) {
 			throw new IllegalStateException("Job must be in CREATED state");
 		}
-		
+
 		if (checkpointCoordinator != null) {
 			checkpointCoordinator.shutdown();
 			checkpointCoordinator = null;
+		}
+
+		if (savepointCoordinator != null) {
+			savepointCoordinator.shutdown();
+			savepointCoordinator = null;
 		}
 	}
 
 	public CheckpointCoordinator getCheckpointCoordinator() {
 		return checkpointCoordinator;
+	}
+
+	public SavepointCoordinator getSavepointCoordinator() {
+		return savepointCoordinator;
 	}
 
 	private ExecutionVertex[] collectExecutionVertices(List<ExecutionJobVertex> jobVertices) {
@@ -431,9 +461,9 @@ public class ExecutionGraph implements Serializable {
 	}
 
 	// --------------------------------------------------------------------------------------------
-	//  Properties and Status of the Execution Graph  
+	//  Properties and Status of the Execution Graph
 	// --------------------------------------------------------------------------------------------
-	
+
 	/**
 	 * Returns a list of BLOB keys referring to the JAR files required to run this job
 	 * @return list of BLOB keys referring to the JAR files required to run this job
@@ -504,7 +534,7 @@ public class ExecutionGraph implements Serializable {
 		// we return a specific iterator that does not fail with concurrent modifications
 		// the list is append only, so it is safe for that
 		final int numElements = this.verticesInCreationOrder.size();
-		
+
 		return new Iterable<ExecutionJobVertex>() {
 			@Override
 			public Iterator<ExecutionJobVertex> iterator() {
@@ -655,16 +685,16 @@ public class ExecutionGraph implements Serializable {
 			this.verticesInCreationOrder.add(ejv);
 		}
 	}
-	
+
 	public void scheduleForExecution(Scheduler scheduler) throws JobException {
 		if (scheduler == null) {
 			throw new IllegalArgumentException("Scheduler must not be null.");
 		}
-		
+
 		if (this.scheduler != null && this.scheduler != scheduler) {
 			throw new IllegalArgumentException("Cannot use different schedulers for the same job");
 		}
-		
+
 		if (transitionState(JobStatus.CREATED, JobStatus.RUNNING)) {
 			this.scheduler = scheduler;
 
@@ -700,7 +730,7 @@ public class ExecutionGraph implements Serializable {
 	public void cancel() {
 		while (true) {
 			JobStatus current = state;
-			
+
 			if (current == JobStatus.RUNNING || current == JobStatus.CREATED) {
 				if (transitionState(current, JobStatus.CANCELLING)) {
 					for (ExecutionJobVertex ejv : verticesInCreationOrder) {
@@ -754,10 +784,10 @@ public class ExecutionGraph implements Serializable {
 					// set the state of the job to failed
 					transitionState(JobStatus.FAILING, JobStatus.FAILED, t);
 				}
-				
+
 				return;
 			}
-			
+
 			// no need to treat other states
 		}
 	}
@@ -790,7 +820,7 @@ public class ExecutionGraph implements Serializable {
 				}
 				numFinishedJobVertices = 0;
 				transitionState(JobStatus.RESTARTING, JobStatus.CREATED);
-				
+
 				// if we have checkpointed state, reload it into the executions
 				if (checkpointCoordinator != null) {
 					checkpointCoordinator.restoreLatestCheckpointedState(getAllVertices(), false, false);
@@ -809,12 +839,45 @@ public class ExecutionGraph implements Serializable {
 	 *
 	 * <p>The recovery of checkpoints might block. Make sure that calls to this method don't
 	 * block the job manager actor and run asynchronously.
-	 * 
+	 *
 	 */
 	public void restoreLatestCheckpointedState() throws Exception {
 		synchronized (progressLock) {
 			if (checkpointCoordinator != null) {
 				checkpointCoordinator.restoreLatestCheckpointedState(getAllVertices(), false, false);
+			}
+		}
+	}
+
+	/**
+	 * Restores the execution state back to a savepoint.
+	 *
+	 * <p>The execution vertices need to be in state {@link ExecutionState#CREATED} when calling
+	 * this method. The operation might block. Make sure that calls don't block the job manager
+	 * actor.
+	 *
+	 * <p><strong>Note</strong>: a call to this method changes the {@link #appId} of the execution
+	 * graph if the operation is successful.
+	 *
+	 * @param savepointPath The path of the savepoint to rollback to.
+	 * @throws IllegalStateException If checkpointing is disabled
+	 * @throws IllegalStateException If checkpoint coordinator is shut down
+	 * @throws Exception If failure during rollback
+	 */
+	public void restoreSavepoint(String savepointPath) throws Exception {
+		synchronized (progressLock) {
+			if (savepointCoordinator != null) {
+				LOG.info("Restoring savepoint: " + savepointPath + ".");
+
+				ApplicationID oldAppId = appId;
+				this.appId = savepointCoordinator.restoreSavepoint(
+						getAllVertices(), savepointPath);
+
+				LOG.info("Set application ID to {} (from: {}).", appId, oldAppId);
+			}
+			else {
+				// Sanity check
+				throw new IllegalStateException("Checkpointing disabled.");
 			}
 		}
 	}
@@ -866,7 +929,7 @@ public class ExecutionGraph implements Serializable {
 			}
 		}
 	}
-	
+
 	private boolean transitionState(JobStatus current, JobStatus newState) {
 		return transitionState(current, newState, null);
 	}
@@ -893,14 +956,14 @@ public class ExecutionGraph implements Serializable {
 			}
 
 			numFinishedJobVertices++;
-			
+
 			if (numFinishedJobVertices == verticesInCreationOrder.size()) {
-				
+
 				// we are done, transition to the final state
 				JobStatus current;
 				while (true) {
 					current = this.state;
-					
+
 					if (current == JobStatus.RUNNING) {
 						if (transitionState(current, JobStatus.FINISHED)) {
 							postRunCleanup();
@@ -916,7 +979,7 @@ public class ExecutionGraph implements Serializable {
 					else if (current == JobStatus.FAILING) {
 						if (numberOfRetriesLeft > 0 && transitionState(current, JobStatus.RESTARTING)) {
 							numberOfRetriesLeft--;
-							
+
 							if (delayBeforeRetrying > 0) {
 								future(new Callable<Object>() {
 									@Override
@@ -971,6 +1034,17 @@ public class ExecutionGraph implements Serializable {
 		catch (Exception e) {
 			LOG.error("Error while cleaning up after execution", e);
 		}
+
+		try {
+			CheckpointCoordinator coord = this.savepointCoordinator;
+			this.savepointCoordinator = null;
+			if (coord != null) {
+				coord.shutdown();
+			}
+		}
+		catch (Exception e) {
+			LOG.error("Error while cleaning up after execution", e);
+		}
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -979,8 +1053,8 @@ public class ExecutionGraph implements Serializable {
 
 	/**
 	 * Updates the state of one of the ExecutionVertex's Execution attempts.
-	 * If the new status if "FINISHED", this also updates the 
-	 * 
+	 * If the new status if "FINISHED", this also updates the
+	 *
 	 * @param state The state update.
 	 * @return True, if the task update was properly applied, false, if the execution attempt was not found.
 	 */
@@ -995,9 +1069,9 @@ public class ExecutionGraph implements Serializable {
 					try {
 						AccumulatorSnapshot accumulators = state.getAccumulators();
 						Map<AccumulatorRegistry.Metric, Accumulator<?, ?>> flinkAccumulators =
-							accumulators.deserializeFlinkAccumulators();
+								accumulators.deserializeFlinkAccumulators();
 						Map<String, Accumulator<?, ?>> userAccumulators =
-							accumulators.deserializeUserAccumulators(userClassLoader);
+								accumulators.deserializeUserAccumulators(userClassLoader);
 						attempt.markFinished(flinkAccumulators, userAccumulators);
 					}
 					catch (Exception e) {
@@ -1097,8 +1171,7 @@ public class ExecutionGraph implements Serializable {
 			this.executionListenerActors.add(listener);
 		}
 	}
-	
-	
+
 	private void notifyJobStatusChange(JobStatus newState, Throwable error) {
 		if (jobStatusListenerActors.size() > 0) {
 			ExecutionGraphMessages.JobStatusChanged message =
@@ -1110,9 +1183,9 @@ public class ExecutionGraph implements Serializable {
 			}
 		}
 	}
-	
+
 	void notifyExecutionChange(JobVertexID vertexId, int subtask, ExecutionAttemptID executionID, ExecutionState
-							newExecutionState, Throwable error)
+			newExecutionState, Throwable error)
 	{
 		ExecutionJobVertex vertex = getJobVertex(vertexId);
 
@@ -1120,9 +1193,9 @@ public class ExecutionGraph implements Serializable {
 			String message = error == null ? null : ExceptionUtils.stringifyException(error);
 			ExecutionGraphMessages.ExecutionStateChanged actorMessage =
 					new ExecutionGraphMessages.ExecutionStateChanged(jobID, vertexId,  vertex.getJobVertex().getName(),
-																	vertex.getParallelism(), subtask,
-																	executionID, newExecutionState,
-																	System.currentTimeMillis(), message);
+							vertex.getParallelism(), subtask,
+							executionID, newExecutionState,
+							System.currentTimeMillis(), message);
 
 			for (ActorGateway listener : executionListenerActors) {
 				listener.tell(actorMessage);
