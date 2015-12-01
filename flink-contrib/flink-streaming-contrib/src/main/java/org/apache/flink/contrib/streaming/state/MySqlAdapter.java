@@ -44,7 +44,7 @@ public class MySqlAdapter implements DbAdapter {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
 
-	private static final byte[] MARKER = new byte[0];
+	private static final byte[] CLEANUP_MARKER = new byte[0];
 	private static long SLEEP_BETWEEN_CLEANUP_CHECKS = 3000;
 	private static long MAX_WAIT_FOR_CLEANUP = 5 * 60 * 1000;
 
@@ -183,12 +183,14 @@ public class MySqlAdapter implements DbAdapter {
 			final long checkpointTs,
 			final long recoveryTs) throws SQLException {
 
-		validateStateId(stateId);
 		try {
 			if (startCleanup(conf, stateId, con, recoveryTs)) {
+				// Only one task should succeed here
 				LOG.debug("Task selected for cleanup, cleaning " + stateId);
-				SQLRetrier.retry(new Callable<Void>() {
 
+				// Execute the cleanup and mark finished (this should be retried
+				// if it fails for some reason)
+				SQLRetrier.retry(new Callable<Void>() {
 					@Override
 					public Void call() throws Exception {
 						try (Statement smt = con.createStatement()) {
@@ -203,14 +205,92 @@ public class MySqlAdapter implements DbAdapter {
 
 				LOG.debug("Cleanup performed successfully for " + stateId);
 			} else {
+				// We need to wait until the cleanup task finishes
 				waitForCleanup(conf, stateId, con, recoveryTs);
 			}
 		} catch (IOException e) {
+			// We don't want to propagate any exceptions here as that would just
+			// cause the state to retrty cleanup
 			throw new RuntimeException("Could not clean up state", e);
 		}
-
 	}
 
+	/**
+	 * Tries to start the cleanup by inserting a marker for the current recovery
+	 * timestamp. Returns true if this is the first task to start and returns
+	 * false if some other task has already inserted the marker before.
+	 */
+	private boolean startCleanup(DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs)
+					throws IOException {
+		return SQLRetrier.retry(new Callable<Boolean>() {
+			@Override
+			public Boolean call() throws Exception {
+				try (PreparedStatement smt = con
+						.prepareStatement("INSERT IGNORE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)")) {
+					setKvInsertParams(stateId, smt, recoveryTs, CLEANUP_MARKER, CLEANUP_MARKER);
+
+					// This statement returns 1 if it can successfully insert
+					// the marker otherwise it returns 0.
+					return smt.executeUpdate() == 1;
+				}
+			}
+		}, conf.getMaxNumberOfSqlRetries());
+	}
+
+	/**
+	 * Update the value of the cleanup marker to NULL indicating that it is
+	 * finished and everyone can start processing.
+	 */
+	private void finishCleanup(final DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs) throws IOException {
+
+		SQLRetrier.retry(new Callable<Boolean>() {
+			@Override
+			public Boolean call() throws Exception {
+				try (PreparedStatement smt = con
+						.prepareStatement("UPDATE " + stateId + " SET v=? WHERE k=? AND timestamp=" + recoveryTs)) {
+					smt.setNull(1, Types.BLOB);
+					smt.setBytes(2, CLEANUP_MARKER);
+					smt.executeUpdate();
+				}
+				return null;
+			}
+		}, conf.getMaxNumberOfSqlRetries());
+	}
+
+	/**
+	 * Checks whether the cleanup marker's value has been updated to NULL
+	 * indicating that the cleanup is finished.
+	 */
+	private boolean isCleanupFinished(final DbBackendConfig conf, final String stateId, final Connection con,
+			final long recoveryTs)
+					throws IOException {
+
+		return SQLRetrier.retry(new Callable<Boolean>() {
+			@Override
+			public Boolean call() throws Exception {
+				try (PreparedStatement smt = con.prepareStatement("SELECT v FROM " + stateId
+						+ " WHERE k = ? AND timestamp = " + recoveryTs)) {
+
+					smt.setBytes(1, CLEANUP_MARKER);
+					ResultSet res = smt.executeQuery();
+
+					if (res.next()) {
+						return res.getBytes(1) == null;
+					} else {
+						throw new RuntimeException("Error in cleanup logic");
+					}
+				}
+			}
+		}, conf.getMaxNumberOfSqlRetries());
+	}
+
+	/**
+	 * Wait until the cleanup task has finished with deleting the failed records
+	 * from the database. This method periodically checks whether the cleanup
+	 * has finished and sleeps between checks.
+	 */
 	private void waitForCleanup(DbBackendConfig conf, final String stateId, final Connection con, final long recoveryTs)
 			throws IOException {
 		boolean wait = true;
@@ -233,61 +313,6 @@ public class MySqlAdapter implements DbAdapter {
 		}
 	}
 
-	private boolean startCleanup(DbBackendConfig conf, final String stateId, final Connection con,
-			final long recoveryTs)
-					throws IOException {
-		return SQLRetrier.retry(new Callable<Boolean>() {
-			@Override
-			public Boolean call() throws Exception {
-				try (PreparedStatement smt = con
-						.prepareStatement("INSERT IGNORE INTO " + stateId + " (timestamp, k, v) VALUES (?,?,?)")) {
-					setKvInsertParams(stateId, smt, recoveryTs, MARKER, MARKER);
-					return smt.executeUpdate() == 1;
-				}
-			}
-		}, conf.getMaxNumberOfSqlRetries());
-	}
-
-	private void finishCleanup(final DbBackendConfig conf, final String stateId, final Connection con,
-			final long recoveryTs) throws IOException {
-
-		SQLRetrier.retry(new Callable<Boolean>() {
-			@Override
-			public Boolean call() throws Exception {
-				try (PreparedStatement smt = con
-						.prepareStatement("UPDATE " + stateId + " SET v=? WHERE k=? AND timestamp=" + recoveryTs)) {
-					smt.setNull(1, Types.BLOB);
-					smt.setBytes(2, MARKER);
-					smt.executeUpdate();
-				}
-				return null;
-			}
-		}, conf.getMaxNumberOfSqlRetries());
-	}
-
-	private boolean isCleanupFinished(final DbBackendConfig conf, final String stateId, final Connection con,
-			final long recoveryTs)
-					throws IOException {
-
-		return SQLRetrier.retry(new Callable<Boolean>() {
-			@Override
-			public Boolean call() throws Exception {
-				try (PreparedStatement smt = con.prepareStatement("SELECT v FROM " + stateId
-						+ " WHERE k = ? AND timestamp = " + recoveryTs)) {
-
-					smt.setBytes(1, MARKER);
-					ResultSet res = smt.executeQuery();
-
-					if (res.next()) {
-						return res.getBytes(1) == null;
-					} else {
-						throw new RuntimeException("Error in cleanup logic");
-					}
-				}
-			}
-		}, conf.getMaxNumberOfSqlRetries());
-	}
-
 	@Override
 	public void compactKvStates(String stateId, Connection con, long lowerId, long upperId)
 			throws SQLException {
@@ -303,16 +328,6 @@ public class MySqlAdapter implements DbAdapter {
 					+ " ) m"
 					+ " ON state.k = m.k"
 					+ " AND state.timestamp >= " + lowerId);
-		}
-	}
-
-	/**
-	 * Tries to avoid SQL injection with weird state names.
-	 * 
-	 */
-	protected static void validateStateId(String name) {
-		if (!name.matches("[a-zA-Z0-9_]+")) {
-			throw new RuntimeException("State name contains invalid characters.");
 		}
 	}
 
@@ -336,6 +351,8 @@ public class MySqlAdapter implements DbAdapter {
 			valueSize = valueSize / 1024;
 		}
 
+		// As we are inserting with INSERT IGNORE statements, we can simply
+		// retry on failed batches without any rollback logic
 		SQLRetrier.retry(new Callable<Void>() {
 			public Void call() throws Exception {
 				for (Tuple2<byte[], byte[]> kv : toInsert) {
@@ -356,6 +373,10 @@ public class MySqlAdapter implements DbAdapter {
 
 	}
 
+	/**
+	 * Sets the proper parameters for the {@link PreparedStatement} used for
+	 * inserts.
+	 */
 	protected void setKvInsertParams(String stateId, PreparedStatement insertStatement, long checkpointTs,
 			byte[] key, byte[] value) throws SQLException {
 		insertStatement.setLong(1, checkpointTs);
@@ -374,8 +395,21 @@ public class MySqlAdapter implements DbAdapter {
 		}
 	}
 
+	/**
+	 * Checks whether the given table is already created in the database.
+	 * 
+	 */
 	private boolean isTableCreated(Connection con, String tableName) throws SQLException {
 		return con.getMetaData().getTables(null, null, tableName, null).next();
+	}
+
+	/**
+	 * Tries to avoid SQL injection with weird state names.
+	 */
+	protected static void validateStateId(String name) {
+		if (!name.matches("[a-zA-Z0-9_]+")) {
+			throw new RuntimeException("State name contains invalid characters.");
+		}
 	}
 
 }
