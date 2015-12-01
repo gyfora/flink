@@ -107,6 +107,24 @@ class DataStream[T](javaStream: JavaStream[T]) {
   }
 
   /**
+    * Sets an ID for this operator.
+    *
+    * The specified ID is used to assign the same operator ID across job
+    * submissions (for example when starting a job from a savepoint).
+    *
+    * <strong>Important</strong>: this ID needs to be unique per
+    * transformation and job. Otherwise, job submission will fail.
+    *
+    * @param uid The unique user-specified ID of this transformation.
+    * @return The operator with the specified ID.
+    */
+  def uid(uid: String) : DataStream[T] = javaStream match {
+    case stream : SingleOutputStreamOperator[T,_] => stream.uid(uid)
+    case _ => throw new UnsupportedOperationException("Only supported for operators.")
+    this
+  }
+
+  /**
    * Turns off chaining for this operator so thread co-location will not be
    * used as an optimization. </p> Chaining can be turned off for the whole
    * job by [[StreamExecutionEnvironment.disableOperatorChaining()]]
@@ -206,7 +224,7 @@ class DataStream[T](javaStream: JavaStream[T]) {
    */
   def connect[T2](dataStream: DataStream[T2]): ConnectedStreams[T, T2] =
     javaStream.connect(dataStream.getJavaStream)
-  
+
   /**
    * Groups the elements of a DataStream by the given key positions (for tuple/array types) to
    * be used with grouped operators like grouped reduce or grouped aggregations.
@@ -218,8 +236,8 @@ class DataStream[T](javaStream: JavaStream[T]) {
    * be used with grouped operators like grouped reduce or grouped aggregations.
    */
   def keyBy(firstField: String, otherFields: String*): KeyedStream[T, JavaTuple] =
-   javaStream.keyBy(firstField +: otherFields.toArray: _*)   
-  
+   javaStream.keyBy(firstField +: otherFields.toArray: _*)
+
   /**
    * Groups the elements of a DataStream by the given K key to
    * be used with grouped operators like grouped reduce or grouped aggregations.
@@ -228,7 +246,7 @@ class DataStream[T](javaStream: JavaStream[T]) {
 
     val cleanFun = clean(fun)
     val keyType: TypeInformation[K] = implicitly[TypeInformation[K]]
-    
+
     val keyExtractor = new KeySelector[T, K] with ResultTypeQueryable[K] {
       def getKey(in: T) = cleanFun(in)
       override def getProducedType: TypeInformation[K] = keyType
@@ -311,7 +329,7 @@ class DataStream[T](javaStream: JavaStream[T]) {
   def broadcast: DataStream[T] = javaStream.broadcast()
 
   /**
-   * Sets the partitioning of the DataStream so that the output values all go to 
+   * Sets the partitioning of the DataStream so that the output values all go to
    * the first instance of the next processing operator. Use this setting with care
    * since it might cause a serious performance bottleneck in the application.
    */
@@ -361,7 +379,7 @@ class DataStream[T](javaStream: JavaStream[T]) {
    * can use the maxWaitTime parameter to set a max waiting time for the iteration head.
    * If no data received in the set time the stream terminates.
    * <p>
-   * By default the feedback partitioning is set to match the input, to override this set 
+   * By default the feedback partitioning is set to match the input, to override this set
    * the keepPartitioning flag to true
    *
    */
@@ -432,7 +450,7 @@ class DataStream[T](javaStream: JavaStream[T]) {
     val outType : TypeInformation[R] = implicitly[TypeInformation[R]]
     javaStream.map(mapper).returns(outType).asInstanceOf[JavaStream[R]]
   }
-  
+
   /**
    * Creates a new DataStream by applying the given function to every element and flattening
    * the results.
