@@ -18,41 +18,23 @@
 
 package org.apache.flink.client;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.FileNotFoundException;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-
 import akka.actor.ActorSystem;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.flink.api.common.InvalidProgramException;
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobSubmissionResult;
 import org.apache.flink.api.common.accumulators.AccumulatorHelper;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.client.cli.CancelOptions;
 import org.apache.flink.client.cli.CliArgsException;
 import org.apache.flink.client.cli.CliFrontendParser;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.client.cli.CommandLineOptions;
 import org.apache.flink.client.cli.InfoOptions;
 import org.apache.flink.client.cli.ListOptions;
 import org.apache.flink.client.cli.ProgramOptions;
 import org.apache.flink.client.cli.RunOptions;
+import org.apache.flink.client.cli.SavepointOptions;
 import org.apache.flink.client.program.Client;
 import org.apache.flink.client.program.PackagedProgram;
 import org.apache.flink.client.program.ProgramInvocationException;
@@ -69,27 +51,50 @@ import org.apache.flink.optimizer.plandump.PlanJSONDumpGenerator;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.client.JobStatusMessage;
 import org.apache.flink.runtime.instance.ActorGateway;
+import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
 import org.apache.flink.runtime.messages.JobManagerMessages;
+import org.apache.flink.runtime.messages.JobManagerMessages.CancelJob;
+import org.apache.flink.runtime.messages.JobManagerMessages.RunningJobsStatus;
+import org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepoint;
+import org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepointSuccess;
 import org.apache.flink.runtime.security.SecurityUtils;
 import org.apache.flink.runtime.util.EnvironmentInformation;
 import org.apache.flink.runtime.util.LeaderRetrievalUtils;
 import org.apache.flink.runtime.yarn.AbstractFlinkYarnClient;
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.runtime.jobgraph.JobStatus;
-import org.apache.flink.runtime.messages.JobManagerMessages.CancelJob;
-import org.apache.flink.runtime.messages.JobManagerMessages.RunningJobsStatus;
 import org.apache.flink.runtime.yarn.AbstractFlinkYarnCluster;
 import org.apache.flink.runtime.yarn.FlinkYarnClusterStatus;
 import org.apache.flink.util.StringUtils;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import scala.Some;
 import scala.concurrent.Await;
 import scala.concurrent.Future;
 import scala.concurrent.duration.FiniteDuration;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+import static org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepoint;
+import static org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepointFailure;
+import static org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepointFailure;
+import static org.apache.flink.runtime.messages.JobManagerMessages.getRequestRunningJobsStatus;
 
 /**
  * Implementation of a simple command line frontend for executing programs.
@@ -101,6 +106,7 @@ public class CliFrontend {
 	public static final String ACTION_INFO = "info";
 	private static final String ACTION_LIST = "list";
 	private static final String ACTION_CANCEL = "cancel";
+	private static final String ACTION_SAVEPOINT = "savepoint";
 
 	// config dir parameters
 	private static final String ENV_CONFIG_DIRECTORY = "FLINK_CONF_DIR";
@@ -301,6 +307,8 @@ public class CliFrontend {
 			client.setPrintStatusDuringExecution(options.getStdoutLogging());
 			LOG.debug("Client slots is set to {}", client.getMaxSlots());
 
+			LOG.debug("Savepoint path is set to {}", options.getSavepointPath());
+
 			try {
 				if (client.getMaxSlots() != -1 && userParallelism == -1) {
 					logAndSysout("Using the parallelism provided by the remote cluster ("+client.getMaxSlots()+"). " +
@@ -483,7 +491,7 @@ public class CliFrontend {
 
 			LOG.info("Connecting to JobManager to retrieve list of jobs");
 			Future<Object> response = jobManagerGateway.ask(
-					JobManagerMessages.getRequestRunningJobsStatus(),
+					getRequestRunningJobsStatus(),
 					askTimeout);
 
 			Object result;
@@ -630,6 +638,136 @@ public class CliFrontend {
 		}
 	}
 
+	/**
+	 * Executes the SAVEPOINT action.
+	 *
+	 * @param args Command line arguments for the cancel action.
+	 */
+	protected int savepoint(String[] args) {
+		LOG.info("Running 'savepoint' command.");
+
+		SavepointOptions options;
+		try {
+			options = CliFrontendParser.parseSavepointCommand(args);
+		}
+		catch (CliArgsException e) {
+			return handleArgException(e);
+		}
+		catch (Throwable t) {
+			return handleError(t);
+		}
+
+		// evaluate help flag
+		if (options.isPrintHelp()) {
+			CliFrontendParser.printHelpForCancel();
+			return 0;
+		}
+
+		if (options.isDispose()) {
+			// Discard
+			return disposeSavepoint(options, options.getDisposeSavepointPath());
+		}
+		else {
+			// Trigger
+			String[] cleanedArgs = options.getArgs();
+			JobID jobId;
+
+			if (cleanedArgs.length > 0) {
+				String jobIdString = cleanedArgs[0];
+				try {
+					jobId = new JobID(StringUtils.hexStringToByte(jobIdString));
+				}
+				catch (Exception e) {
+					LOG.error("Error: The value for the Job ID is not a valid ID.");
+					System.out.println("Error: The value for the Job ID is not a valid ID.");
+					return 1;
+				}
+			}
+			else {
+				LOG.error("Missing JobID in the command line arguments.");
+				System.out.println("Error: Specify a Job ID to cancel a job.");
+				return 1;
+			}
+
+			return triggerSavepoint(options, jobId);
+		}
+	}
+
+	/**
+	 * Sends a {@link org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepoint}
+	 * message to the job manager.
+	 */
+	private int triggerSavepoint(SavepointOptions options, JobID jobId) {
+		try {
+			ActorGateway jobManager = getJobManagerGateway(options);
+			Future<Object> response = jobManager.ask(new TriggerSavepoint(jobId), askTimeout);
+
+			Object result;
+			try {
+				logAndSysout("Triggering savepoint for job " + jobId + ". Waiting for response...");
+				result = Await.result(response, askTimeout);
+			}
+			catch (Exception e) {
+				throw new Exception("Triggering a savepoint for the job " + jobId + " failed.", e);
+			}
+
+			if (result instanceof TriggerSavepointSuccess) {
+				TriggerSavepointSuccess success = (TriggerSavepointSuccess) result;
+				logAndSysout("Savepoint completed. Path: " + success.savepointPath());
+				logAndSysout("You can resume your program from this savepoint with the run command.");
+
+				return 0;
+			}
+			else if (result instanceof TriggerSavepointFailure) {
+				TriggerSavepointFailure failure = (TriggerSavepointFailure) result;
+				throw failure.cause();
+			}
+			else {
+				throw new IllegalStateException("Unknown JobManager response of type " +
+						result.getClass());
+			}
+		}
+		catch (Throwable t) {
+			return handleError(t);
+		}
+	}
+
+	/**
+	 * Sends a {@link org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepoint}
+	 * message to the job manager.
+	 */
+	private int disposeSavepoint(SavepointOptions options, String savepointPath) {
+		try {
+			ActorGateway jobManager = getJobManagerGateway(options);
+			Future<Object> response = jobManager.ask(new DisposeSavepoint(savepointPath), askTimeout);
+
+			Object result;
+			try {
+				logAndSysout("Disposing savepoint '" + savepointPath + "'. Waiting for response...");
+				result = Await.result(response, askTimeout);
+			}
+			catch (Exception e) {
+				throw new Exception("Disposing the savepoint with path" + savepointPath + " failed.", e);
+			}
+
+			if (result.getClass() == JobManagerMessages.getDisposeSavepointSuccess().getClass()) {
+				logAndSysout("Savepoint '" + savepointPath + "' disposed.");
+				return 0;
+			}
+			else if (result instanceof DisposeSavepointFailure) {
+				DisposeSavepointFailure failure = (DisposeSavepointFailure) result;
+				throw failure.cause();
+			}
+			else {
+				throw new IllegalStateException("Unknown JobManager response of type " +
+						result.getClass());
+			}
+		}
+		catch (Throwable t) {
+			return handleError(t);
+		}
+	}
+
 	// --------------------------------------------------------------------------------------------
 	//  Interaction with programs and JobManager
 	// --------------------------------------------------------------------------------------------
@@ -719,9 +857,13 @@ public class CliFrontend {
 		// Get assembler class
 		String entryPointClass = options.getEntryPointClassName();
 
-		return entryPointClass == null ?
+		PackagedProgram program = entryPointClass == null ?
 				new PackagedProgram(jarFile, classpaths, programArgs) :
 				new PackagedProgram(jarFile, classpaths, entryPointClass, programArgs);
+
+		program.setSavepointPath(options.getSavepointPath());
+
+		return program;
 	}
 
 	/**
@@ -995,6 +1137,9 @@ public class CliFrontend {
 		}
 		else if (action.equals(ACTION_CANCEL)) {
 			return cancel(params);
+		}
+		else if (action.equals(ACTION_SAVEPOINT)) {
+			return savepoint(params);
 		}
 		else if (action.equals("-h") || action.equals("--help")) {
 			CliFrontendParser.printHelp();
