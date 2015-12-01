@@ -21,6 +21,7 @@ package org.apache.flink.runtime.operators.testutils;
 import java.util.Map;
 import java.util.concurrent.Future;
 
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
@@ -42,6 +43,7 @@ public class DummyEnvironment implements Environment {
 	private final String taskName;
 	private final int numSubTasks;
 	private final int subTaskIndex;
+	private final ApplicationID appId = new ApplicationID();
 	private final JobID jobId = new JobID();
 	private final JobVertexID jobVertexId = new JobVertexID();
 
@@ -49,6 +51,11 @@ public class DummyEnvironment implements Environment {
 		this.taskName = taskName;
 		this.numSubTasks = numSubTasks;
 		this.subTaskIndex = subTaskIndex;
+	}
+
+	@Override
+	public ApplicationID getApplicationID() {
+		return appId;
 	}
 
 	@Override

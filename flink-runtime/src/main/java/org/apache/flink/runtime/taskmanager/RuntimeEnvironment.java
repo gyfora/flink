@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.taskmanager;
 
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
@@ -46,7 +47,8 @@ import static com.google.common.base.Preconditions.checkArgument;
  * In implementation of the {@link Environment}.
  */
 public class RuntimeEnvironment implements Environment {
-	
+
+	private final ApplicationID appId;
 	private final JobID jobId;
 	private final JobVertexID jobVertexId;
 	private final ExecutionAttemptID executionId;
@@ -80,6 +82,7 @@ public class RuntimeEnvironment implements Environment {
 	// ------------------------------------------------------------------------
 
 	public RuntimeEnvironment(
+			ApplicationID appId,
 			JobID jobId,
 			JobVertexID jobVertexId,
 			ExecutionAttemptID executionId,
@@ -103,6 +106,7 @@ public class RuntimeEnvironment implements Environment {
 		
 		checkArgument(parallelism > 0 && subtaskIndex >= 0 && subtaskIndex < parallelism);
 
+		this.appId = checkNotNull(appId);
 		this.jobId = checkNotNull(jobId);
 		this.jobVertexId = checkNotNull(jobVertexId);
 		this.executionId = checkNotNull(executionId);
@@ -126,7 +130,12 @@ public class RuntimeEnvironment implements Environment {
 	}
 
 	// ------------------------------------------------------------------------
-	
+
+	@Override
+	public ApplicationID getApplicationID() {
+		return appId;
+	}
+
 	@Override
 	public JobID getJobID() {
 		return jobId;

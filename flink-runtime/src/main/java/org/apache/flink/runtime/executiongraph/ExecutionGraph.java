@@ -19,26 +19,29 @@
 package org.apache.flink.runtime.executiongraph;
 
 import akka.actor.ActorSystem;
-
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.api.common.accumulators.AccumulatorHelper;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.JobException;
-import org.apache.flink.runtime.accumulators.AccumulatorSnapshot;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
+import org.apache.flink.runtime.accumulators.AccumulatorSnapshot;
 import org.apache.flink.runtime.accumulators.StringifiedAccumulatorResult;
 import org.apache.flink.runtime.blob.BlobKey;
 import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
 import org.apache.flink.runtime.checkpoint.CheckpointIDCounter;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpointStore;
+import org.apache.flink.runtime.checkpoint.Savepoint;
+import org.apache.flink.runtime.checkpoint.SavepointCoordinator;
+import org.apache.flink.runtime.checkpoint.StateStore;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
-import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
-import org.apache.flink.api.common.JobID;
 import org.apache.flink.runtime.jobgraph.JobStatus;
+import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.ScheduleMode;
 import org.apache.flink.runtime.jobmanager.RecoveryMode;
@@ -47,13 +50,11 @@ import org.apache.flink.runtime.messages.ExecutionGraphMessages;
 import org.apache.flink.runtime.taskmanager.TaskExecutionState;
 import org.apache.flink.runtime.util.SerializableObject;
 import org.apache.flink.runtime.util.SerializedThrowable;
-import org.apache.flink.util.SerializedValue;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.InstantiationUtil;
-
+import org.apache.flink.util.SerializedValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import scala.concurrent.ExecutionContext;
 import scala.concurrent.duration.FiniteDuration;
 
@@ -75,6 +76,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static akka.dispatch.Futures.future;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * The execution graph is the central data structure that coordinates the distributed
@@ -118,7 +120,12 @@ public class ExecutionGraph implements Serializable {
 	/** The lock used to secure all access to mutable fields, especially the tracking of progress
 	 * within the job. */
 	private final SerializableObject progressLock = new SerializableObject();
-	
+
+	/** The ID of the application this graph has been built for. This is
+	 * generated when the graph is created and reset if necessary (currently
+	 * only after {@link #restoreSavepoint(String)}). */
+	private ApplicationID appId = new ApplicationID();
+
 	/** The ID of the job this graph has been built for. */
 	private final JobID jobID;
 
@@ -164,7 +171,6 @@ public class ExecutionGraph implements Serializable {
 	/** The timeout for all messages that require a response/acknowledgement */
 	private final FiniteDuration timeout;
 
-
 	// ------ Configuration of the Execution -------
 
 	/** The number of times failed executions should be retried. */
@@ -184,7 +190,6 @@ public class ExecutionGraph implements Serializable {
 
 	/** Flag to indicate whether the Graph has been archived */
 	private boolean isArchived = false;
-		
 
 	// ------ Execution status and progress. These values are volatile, and accessed under the lock -------
 
@@ -197,8 +202,7 @@ public class ExecutionGraph implements Serializable {
 
 	/** The number of job vertices that have reached a terminal state */
 	private volatile int numFinishedJobVertices;
-	
-	
+
 	// ------ Fields that are relevant to the execution and need to be cleared before archiving  -------
 
 	/** The scheduler to use for scheduling new tasks as they are needed */
@@ -257,16 +261,12 @@ public class ExecutionGraph implements Serializable {
 			List<URL> requiredClasspaths,
 			ClassLoader userClassLoader) {
 
-		if (executionContext == null || jobId == null || jobName == null || jobConfig == null || userClassLoader == null) {
-			throw new NullPointerException();
-		}
+		this.executionContext = checkNotNull(executionContext);
 
-		this.executionContext = executionContext;
-
-		this.jobID = jobId;
-		this.jobName = jobName;
-		this.jobConfiguration = jobConfig;
-		this.userClassLoader = userClassLoader;
+		this.jobID = checkNotNull(jobId);
+		this.jobName = checkNotNull(jobName);
+		this.jobConfiguration = checkNotNull(jobConfig);
+		this.userClassLoader = checkNotNull(userClassLoader);
 
 		this.tasks = new ConcurrentHashMap<JobVertexID, ExecutionJobVertex>();
 		this.intermediateResults = new ConcurrentHashMap<IntermediateDataSetID, IntermediateResult>();
@@ -382,11 +382,11 @@ public class ExecutionGraph implements Serializable {
 				checkpointIDCounter,
 				completedCheckpointStore,
 				recoveryMode);
-		
+
 		// the periodic checkpoint scheduler is activated and deactivated as a result of
 		// job status changes (running -> on, all other states -> off)
-		registerJobStatusListener(
-				checkpointCoordinator.createActivatorDeactivator(actorSystem, leaderSessionID));
+		registerJobStatusListener(checkpointCoordinator
+				.createActivatorDeactivator(actorSystem, leaderSessionID));
 	}
 
 	/**
@@ -462,6 +462,10 @@ public class ExecutionGraph implements Serializable {
 
 	public Scheduler getScheduler() {
 		return scheduler;
+	}
+
+	public ApplicationID getApplicationID() {
+		return appId;
 	}
 
 	public JobID getJobID() {

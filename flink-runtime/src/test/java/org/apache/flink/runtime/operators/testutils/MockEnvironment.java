@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.operators.testutils;
 
+import org.apache.flink.api.common.ApplicationID;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.UnmodifiableConfiguration;
 import org.apache.flink.core.fs.Path;
@@ -77,6 +78,8 @@ public class MockEnvironment implements Environment {
 	private final List<InputGate> inputs;
 
 	private final List<ResultPartitionWriter> outputs;
+
+	private final ApplicationID appId = new ApplicationID();
 
 	private final JobID jobID = new JobID();
 
@@ -182,6 +185,11 @@ public class MockEnvironment implements Environment {
 	@Override
 	public IOManager getIOManager() {
 		return this.ioManager;
+	}
+
+	@Override
+	public ApplicationID getApplicationID() {
+		return this.appId;
 	}
 
 	@Override
