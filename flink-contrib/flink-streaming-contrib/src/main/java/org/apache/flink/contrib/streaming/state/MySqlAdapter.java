@@ -45,6 +45,8 @@ public class MySqlAdapter implements DbAdapter {
 	private static final Logger LOG = LoggerFactory.getLogger(MySqlAdapter.class);
 
 	private static final byte[] MARKER = new byte[0];
+	private static long SLEEP_BETWEEN_CLEANUP_CHECKS = 3000;
+	private static long MAX_WAIT_FOR_CLEANUP = 5 * 60 * 1000;
 
 	// -----------------------------------------------------------------------------
 	// Non-partitioned state checkpointing
@@ -135,7 +137,8 @@ public class MySqlAdapter implements DbAdapter {
 								+ "timestamp bigint, "
 								+ "k varbinary(256), "
 								+ "v blob, "
-								+ "PRIMARY KEY (k, timestamp) "
+								+ "PRIMARY KEY (k, timestamp), "
+								+ "KEY (timestamp)"
 								+ ")");
 			}
 			LOG.debug("KV checkpoint table created for {}", stateId);
@@ -210,18 +213,19 @@ public class MySqlAdapter implements DbAdapter {
 
 	private void waitForCleanup(DbBackendConfig conf, final String stateId, final Connection con, final long recoveryTs)
 			throws IOException {
-		int c = 0;
 		boolean wait = true;
+		long slept = 0;
 		while (wait) {
-			c++;
 			try {
 				if (isCleanupFinished(conf, stateId, con, recoveryTs)) {
 					wait = false;
-				} else if (c > 60) {
-					throw new IOException("Could not clean up in 30 seconds.");
 				} else {
 					LOG.debug("Some other task is already cleaning, sleeping...");
-					Thread.sleep(500);
+					Thread.sleep(SLEEP_BETWEEN_CLEANUP_CHECKS);
+					slept += SLEEP_BETWEEN_CLEANUP_CHECKS;
+					if (slept >= MAX_WAIT_FOR_CLEANUP) {
+						throw new IOException("Could not clean up in " + MAX_WAIT_FOR_CLEANUP / 1000 + " seconds.");
+					}
 				}
 			} catch (InterruptedException e) {
 				wait = false;
