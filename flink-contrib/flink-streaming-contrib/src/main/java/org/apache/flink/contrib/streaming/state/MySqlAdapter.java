@@ -149,7 +149,9 @@ public class MySqlAdapter implements DbAdapter {
 								+ "k varbinary(256), "
 								+ "v blob, "
 								+ "PRIMARY KEY (k, timestamp) "
-								+ ")");
+								+ ") "
+								+ "ROW_FORMAT=COMPRESSED "
+								+ "KEY_BLOCK_SIZE=8");
 			}
 			LOG.debug("KV checkpoint table created for {}", stateId);
 		} else {
