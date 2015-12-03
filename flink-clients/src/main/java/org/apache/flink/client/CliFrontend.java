@@ -705,7 +705,7 @@ public class CliFrontend {
 			Object result;
 			try {
 				logAndSysout("Triggering savepoint for job " + jobId + ". Waiting for response...");
-				result = Await.result(response, askTimeout);
+				result = Await.result(response, FiniteDuration.Inf());
 			}
 			catch (Exception e) {
 				throw new Exception("Triggering a savepoint for the job " + jobId + " failed.", e);
