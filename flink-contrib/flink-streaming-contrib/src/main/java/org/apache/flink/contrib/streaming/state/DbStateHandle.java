@@ -31,14 +31,13 @@ import org.slf4j.LoggerFactory;
 /**
  * State handle implementation for storing checkpoints as byte arrays in
  * databases using the {@link MySqlAdapter} defined in the {@link DbBackendConfig}.
- * 
  */
 public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 
 	private static final long serialVersionUID = 1L;
 	private static final Logger LOG = LoggerFactory.getLogger(DbStateHandle.class);
 
-	private final String jobId;
+	private final String appId;
 	private final DbBackendConfig dbConfig;
 
 	private final long checkpointId;
@@ -46,10 +45,10 @@ public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 
 	private final long handleId;
 
-	public DbStateHandle(String jobId, long checkpointId, long checkpointTs, long handleId, DbBackendConfig dbConfig) {
+	public DbStateHandle(String appId, long checkpointId, long checkpointTs, long handleId, DbBackendConfig dbConfig) {
 		this.checkpointId = checkpointId;
 		this.handleId = handleId;
-		this.jobId = jobId;
+		this.appId = appId;
 		this.dbConfig = dbConfig;
 		this.checkpointTs = checkpointTs;
 	}
@@ -58,7 +57,7 @@ public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 		return retry(new Callable<byte[]>() {
 			public byte[] call() throws Exception {
 				try (ShardedConnection con = dbConfig.createShardedConnection()) {
-					return dbConfig.getDbAdapter().getCheckpoint(jobId, con.getFirst(), checkpointId, checkpointTs, handleId);
+					return dbConfig.getDbAdapter().getCheckpoint(appId, con.getFirst(), checkpointId, checkpointTs, handleId);
 				}
 			}
 		}, dbConfig.getMaxNumberOfSqlRetries(), dbConfig.getSleepBetweenSqlRetries());
@@ -70,7 +69,7 @@ public class DbStateHandle<S> implements Serializable, StateHandle<S> {
 			retry(new Callable<Boolean>() {
 				public Boolean call() throws Exception {
 					try (ShardedConnection con = dbConfig.createShardedConnection()) {
-						dbConfig.getDbAdapter().deleteCheckpoint(jobId, con.getFirst(), checkpointId, checkpointTs, handleId);
+						dbConfig.getDbAdapter().deleteCheckpoint(appId, con.getFirst(), checkpointId, checkpointTs, handleId);
 					}
 					return true;
 				}
