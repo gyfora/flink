@@ -49,7 +49,7 @@ This is the **default backend** for savepoints.
 Savepoints are stored on the heap of the job manager. They are *lost* after the job manager is shut down. This mode is only useful if you want to *stop* and *resume* your program while the **same cluster** keeps running. It is *not recommended* for production use. Savepoints are *not* part the [job manager's highly availabile]({{ site.baseurl }}/setup/jobmanager_high_availability.html) state.
 
 <pre>
-state.backend.savepoints: jobmanager
+savepoints.state.backend: jobmanager
 </pre>
 
 **Note**: If you don't configure a specific state backend for the savepoints, the default state backend (config key `state.backend`) will be used.
@@ -59,8 +59,8 @@ state.backend.savepoints: jobmanager
 Savepoints are stored in the configured **file system directory**. They are available between cluster instances and allow to move your program to another cluster.
 
 <pre>
-state.backend.savepoints: filesystem
-state.backend.savepoints.fs.dir: hdfs:///flink/savepoints
+savepoints.state.backend: filesystem
+savepoints.state.backend.fs.dir: hdfs:///flink/savepoints
 </pre>
 
 **Note**: If you don't configure a specific directory, the checkpoint directory (config key `state.backend.fs.checkpointdir`) will be used.
