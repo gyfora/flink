@@ -678,15 +678,14 @@ public class CliFrontend {
 					jobId = new JobID(StringUtils.hexStringToByte(jobIdString));
 				}
 				catch (Exception e) {
-					LOG.error("Error: The value for the Job ID is not a valid ID.");
-					System.out.println("Error: The value for the Job ID is not a valid ID.");
-					return 1;
+					return handleError(new IllegalArgumentException(
+							"Error: The value for the Job ID is not a valid ID."));
 				}
 			}
 			else {
-				LOG.error("Missing JobID in the command line arguments.");
-				System.out.println("Error: Specify a Job ID to cancel a job.");
-				return 1;
+				return handleError(new IllegalArgumentException(
+						"Error: The value for the Job ID is not a valid ID. " +
+								"Specify a Job ID to trigger a savepoint."));
 			}
 
 			return triggerSavepoint(options, jobId);
