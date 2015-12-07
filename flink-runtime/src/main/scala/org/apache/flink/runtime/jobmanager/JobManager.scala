@@ -353,7 +353,7 @@ class JobManager(
       val client = sender()
 
       val jobInfo = new JobInfo(client, listeningBehaviour, System.currentTimeMillis(),
-            jobGraph.getSessionTimeout)
+        jobGraph.getSessionTimeout)
 
       submitJob(jobGraph, jobInfo)
 
@@ -538,15 +538,13 @@ class JobManager(
                     senderRef ! TriggerSavepointFailure(jobId,
                       new Exception("Failed to complete savepoint", t))
                 }(context.dispatcher)
-              }
-              catch {
+              } catch {
                 case e: Exception =>
                   senderRef ! TriggerSavepointFailure(jobId, new Exception(
                     "Failed to trigger savepoint", e))
               }
             }(context.dispatcher)
-          }
-          else {
+          } else {
             sender() ! TriggerSavepointFailure(jobId, new IllegalStateException(
               "Checkpointing disabled. You can enable it via the execution environment of " +
                 "your job."))
@@ -573,8 +571,7 @@ class JobManager(
           savepointStore.disposeState(savepointPath)
 
           senderRef ! DisposeSavepointSuccess
-        }
-        catch {
+        } catch {
           case t: Throwable =>
             log.error(s"Failed to dispose savepoint at '$savepointPath'.", t)
 
@@ -840,10 +837,7 @@ class JobManager(
    * @param jobInfo the job info
    * @param isRecovery Flag indicating whether this is a recovery or initial submission
    */
-  private def submitJob(
-    jobGraph: JobGraph,
-    jobInfo: JobInfo,
-    isRecovery: Boolean = false): Unit = {
+  private def submitJob(jobGraph: JobGraph, jobInfo: JobInfo, isRecovery: Boolean = false): Unit = {
 
     if (jobGraph == null) {
       jobInfo.client ! decorateMessage(JobResultFailure(
