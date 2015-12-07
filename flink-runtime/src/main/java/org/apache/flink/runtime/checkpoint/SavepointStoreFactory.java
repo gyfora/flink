@@ -29,8 +29,8 @@ import org.slf4j.LoggerFactory;
  */
 public class SavepointStoreFactory {
 
-	public static final String SAVEPOINT_BACKEND_KEY = "state.backend.savepoints";
-	public static final String SAVEPOINT_DIRECTORY_KEY = "state.backend.savepoints.fs.dir";
+	public static final String SAVEPOINT_BACKEND_KEY = "savepoints.state.backend";
+	public static final String SAVEPOINT_DIRECTORY_KEY = "savepoints.state.backend.fs.dir";
 
 	public static final Logger LOG = LoggerFactory.getLogger(SavepointStoreFactory.class);
 
