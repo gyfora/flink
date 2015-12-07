@@ -55,7 +55,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * instance. Otherwise, there can be unwanted queueing effects like discarding
  * savepoints, because of in-progress periodic checkpoints.
  *
- * <p>The savepoint coordnator registers callbacks on the regular checkpoint
+ * <p>The savepoint coordinator registers callbacks on the regular checkpoint
  * life-cycle and manages a map of promises, which are completed/failed as soon
  * as the trigged checkpoint is done.
  *
