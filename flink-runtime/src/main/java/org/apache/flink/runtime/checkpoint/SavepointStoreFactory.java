@@ -20,9 +20,10 @@ package org.apache.flink.runtime.checkpoint;
 
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.state.filesystem.FsStateBackendFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 
 /**
  * Factory for savepoint {@link StateStore} instances.
@@ -34,71 +35,85 @@ public class SavepointStoreFactory {
 
 	public static final Logger LOG = LoggerFactory.getLogger(SavepointStoreFactory.class);
 
+	/**
+	 * Creates a {@link SavepointStore} from the specified Configuration.
+	 *
+	 * <p>You can configure a savepoint-specific backend for the savepoints. If
+	 * you don't configure anything, the regular checkpoint backend will be
+	 * used.
+	 *
+	 * <p>The default and fallback backend is the job manager, which loses the
+	 * savepoint after the job manager shuts down.
+	 *
+	 * @param config The configuration to parse the savepoint backend configuration.
+	 * @return A savepoint store.
+	 */
 	public static SavepointStore createFromConfig(
 			Configuration config) throws Exception {
 
-		String backendName = config.getString(SAVEPOINT_BACKEND_KEY, null);
+		// Try a the savepoint-specific configuration first.
+		String savepointBackend = config.getString(SAVEPOINT_BACKEND_KEY, null);
 
-		if (backendName == null) {
-			LOG.warn("No specific savepoint state backend has been configured. Using configured " +
-					"state backend.");
-
-			backendName = config.getString(ConfigConstants.STATE_BACKEND, null);
-
-			if (backendName == null) {
-				LOG.warn("No state backend has been specified. Using default state " +
-						"backend (JobManager)");
-				backendName = "jobmanager";
-			}
+		if (savepointBackend == null) {
+			LOG.info("No savepoint state backend configured. " +
+					"Using job manager savepoint state backend.");
+			return createJobManagerSavepointStore();
 		}
+		else if (savepointBackend.equals("jobmanager")) {
+			LOG.info("Using job manager savepoint state backend.");
+			return createJobManagerSavepointStore();
+		}
+		else if (savepointBackend.equals("filesystem")) {
+			// Sanity check that the checkpoints are not stored on the job manager only
+			String checkpointBackend = config.getString(
+					ConfigConstants.STATE_BACKEND, "jobmanager");
 
-		backendName = backendName.toLowerCase();
-		switch (backendName) {
-			case "jobmanager":
-				LOG.info("Savepoint state backend is set to JobManager (heap memory).");
-				return new SavepointStore(new HeapStateStore<Savepoint>());
+			if (checkpointBackend.equals("jobmanager")) {
+				LOG.warn("The combination of file system backend for savepoints and " +
+						"jobmanager backend for checkpoints does not work. The savepoint " +
+						"will *not* be recoverable after the job manager shuts down. " +
+						"Falling back to job manager savepoint state backend.");
 
-			case "filesystem":
+				return createJobManagerSavepointStore();
+			}
+			else {
 				String rootPath = config.getString(SAVEPOINT_DIRECTORY_KEY, null);
 
 				if (rootPath == null) {
-					String checkpointPath = config.getString(
-							FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY, null);
+					LOG.warn("Using filesystem as savepoint state backend, " +
+							"but did not specify directory. Please set the " +
+							"following configuration key: '" + SAVEPOINT_DIRECTORY_KEY +
+							"' (e.g. " + SAVEPOINT_DIRECTORY_KEY + ": hdfs:///flink/savepoints/). " +
+							"Falling back to job manager savepoint backend.");
 
-					LOG.warn("Using filesystem as state backend "
-							+ "for savepoints, but did not specify directory. Please set the "
-							+ "following configuration key: '"
-							+ SAVEPOINT_DIRECTORY_KEY + "' (e.g. "
-							+ SAVEPOINT_DIRECTORY_KEY + ": hdfs:///flink/savepoints/). " +
-							"Falling back to value of '" + FsStateBackendFactory
-							.CHECKPOINT_DIRECTORY_URI_CONF_KEY + "': " + checkpointPath + ".");
-
-					if (checkpointPath == null) {
-						LOG.warn("FileSystem savepoint backend is not configured. " +
-								"Please set the following configuration key: '"
-								+ SAVEPOINT_DIRECTORY_KEY + "' (e.g. "
-								+ SAVEPOINT_DIRECTORY_KEY + ": hdfs:///flink/" +
-								"savepoints/). Falling back to job manager backend.");
-
-						return new SavepointStore(new HeapStateStore<Savepoint>());
-					}
-					else {
-						// Set fall back
-						rootPath = checkpointPath;
-					}
+					return createJobManagerSavepointStore();
 				}
+				else {
+					LOG.info("Using filesystem savepoint backend (root path: {}).", rootPath);
 
-				LOG.info("Savepoint state backend is set to FileSystem (" + rootPath + ")");
-
-				return new SavepointStore(new FileSystemStateStore<Savepoint>(
-						rootPath, "savepoint-"));
-
-			default:
-				LOG.warn("Unrecognized state backend '" + backendName + "' for savepoints. " +
-						"Falling back to job manager backend.");
-
-				return new SavepointStore(new HeapStateStore<Savepoint>());
+					return createFileSystemSavepointStore(rootPath);
+				}
+			}
 		}
+		else {
+			// Fallback
+			LOG.warn("Unexpected savepoint backend configuration '{}'. " +
+					"Falling back to job manager savepoint state backend.", savepointBackend);
+
+			return createJobManagerSavepointStore();
+		}
+	}
+
+	// ------------------------------------------------------------------------
+	// Savepoint stores
+	// ------------------------------------------------------------------------
+
+	private static SavepointStore createJobManagerSavepointStore() {
+		return new SavepointStore(new HeapStateStore<Savepoint>());
+	}
+
+	private static SavepointStore createFileSystemSavepointStore(String rootPath) throws IOException {
+		return new SavepointStore(new FileSystemStateStore<Savepoint>(rootPath, "savepoint-"));
 	}
 
 }

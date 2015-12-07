@@ -39,7 +39,6 @@ import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
-import org.apache.flink.runtime.messages.JobManagerMessages;
 import org.apache.flink.runtime.messages.JobManagerMessages.CancelJob;
 import org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepoint;
 import org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepoint;
@@ -47,7 +46,6 @@ import org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepointSucc
 import org.apache.flink.runtime.state.filesystem.AbstractFileState;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.runtime.state.filesystem.FsStateBackendFactory;
-import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages;
 import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.NotifyWhenJobRemoved;
 import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.RequestSavepoint;
 import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.ResponseSavepoint;
@@ -64,7 +62,6 @@ import org.apache.flink.streaming.runtime.tasks.StreamTaskState;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskStateList;
 import org.apache.flink.test.util.ForkableFlinkMiniCluster;
 import org.apache.flink.util.TestLogger;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,7 +79,8 @@ import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import static org.apache.flink.runtime.messages.JobManagerMessages.*;
+import static org.apache.flink.runtime.messages.JobManagerMessages.CancellationSuccess;
+import static org.apache.flink.runtime.messages.JobManagerMessages.getDisposeSavepointSuccess;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -152,6 +150,7 @@ public class SavepointITCase extends TestLogger {
 			config.setString(ConfigConstants.STATE_BACKEND, "filesystem");
 			config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY,
 					checkpointDir.toURI().toString());
+			config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "filesystem");
 			config.setString(SavepointStoreFactory.SAVEPOINT_DIRECTORY_KEY,
 					savepointDir.toURI().toString());
 
@@ -441,6 +440,8 @@ public class SavepointITCase extends TestLogger {
 			LOG.info("Created temporary savepoint directory: " + savepointDir + ".");
 
 			config.setString(ConfigConstants.STATE_BACKEND, "filesystem");
+			config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "fileystem");
+
 			config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY,
 					checkpointDir.toURI().toString());
 			config.setString(SavepointStoreFactory.SAVEPOINT_DIRECTORY_KEY,
