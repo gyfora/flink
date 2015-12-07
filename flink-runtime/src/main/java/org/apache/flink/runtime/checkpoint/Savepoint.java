@@ -30,6 +30,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
  */
 public class Savepoint implements Serializable {
 
+	private static final long serialVersionUID = 840132134745425068L;
+
 	private final ApplicationID appId;
 
 	private final CompletedCheckpoint completedCheckpoint;
