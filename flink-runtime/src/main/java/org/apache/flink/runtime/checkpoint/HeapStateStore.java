@@ -20,8 +20,8 @@ package org.apache.flink.runtime.checkpoint;
 
 import java.io.Serializable;
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -33,7 +33,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
  */
 class HeapStateStore<T extends Serializable> implements StateStore<T> {
 
-	private final Map<String, T> stateMap = new HashMap<>();
+	private final ConcurrentMap<String, T> stateMap = new ConcurrentHashMap<>();
 
 	private final AtomicInteger idCounter = new AtomicInteger();
 
