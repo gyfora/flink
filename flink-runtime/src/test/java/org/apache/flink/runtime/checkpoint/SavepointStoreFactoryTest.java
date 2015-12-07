@@ -21,7 +21,6 @@ package org.apache.flink.runtime.checkpoint;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.runtime.state.filesystem.FsStateBackendFactory;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -31,88 +30,59 @@ public class SavepointStoreFactoryTest {
 
 	@Test
 	public void testStateStoreWithDefaultConfig() throws Exception {
-		SavepointStore store = SavepointStoreFactory
-				.createFromConfig(new Configuration());
-
+		SavepointStore store = SavepointStoreFactory.createFromConfig(new Configuration());
 		assertTrue(store.getStateStore() instanceof HeapStateStore);
 	}
 
 	@Test
-	public void testSavepointSpecificConfig() throws Exception {
+	public void testSavepointBackendJobManager() throws Exception {
 		Configuration config = new Configuration();
-		config.setString(ConfigConstants.STATE_BACKEND, "filesystem");
 		config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "jobmanager");
-
 		SavepointStore store = SavepointStoreFactory.createFromConfig(config);
-
 		assertTrue(store.getStateStore() instanceof HeapStateStore);
 	}
 
 	@Test
-	public void testStateStoreWithFileSystemBackend() throws Exception {
+	public void testSavepointBackendFileSystem() throws Exception {
 		Configuration config = new Configuration();
-
-		String expectedRootPath = System.getProperty("java.io.tmpdir");
-
+		String rootPath = System.getProperty("java.io.tmpdir");
 		config.setString(ConfigConstants.STATE_BACKEND, "filesystem");
-		config.setString(SavepointStoreFactory.SAVEPOINT_DIRECTORY_KEY, expectedRootPath);
+		config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "filesystem");
+		config.setString(SavepointStoreFactory.SAVEPOINT_DIRECTORY_KEY, rootPath);
 
 		SavepointStore store = SavepointStoreFactory.createFromConfig(config);
-
 		assertTrue(store.getStateStore() instanceof FileSystemStateStore);
 
-		FileSystemStateStore fsStore = (FileSystemStateStore) store.getStateStore();
-
-		assertEquals(new Path(expectedRootPath), fsStore.getRootPath());
+		FileSystemStateStore<Savepoint> stateStore = (FileSystemStateStore<Savepoint>)
+				store.getStateStore();
+		assertEquals(new Path(rootPath), stateStore.getRootPath());
 	}
 
 	@Test
-	public void testSavepointSpecificConfigWithFileSystemBackend() throws Exception {
+	public void testSavepointBackendFileSystemButCheckpointBackendJobManager() throws Exception {
 		Configuration config = new Configuration();
 
-		String expectedRootPath = System.getProperty("java.io.tmpdir");
-
+		// This combination does not make sense, because the checkpoints will be
+		// lost after the job manager shuts down.
 		config.setString(ConfigConstants.STATE_BACKEND, "jobmanager");
 		config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "filesystem");
-		config.setString(SavepointStoreFactory.SAVEPOINT_DIRECTORY_KEY, expectedRootPath);
-
-		SavepointStore store = SavepointStoreFactory
-				.createFromConfig(config);
-
-		assertTrue(store.getStateStore() instanceof FileSystemStateStore);
-
-		FileSystemStateStore fsStore = (FileSystemStateStore) store.getStateStore();
-
-		assertEquals(new Path(expectedRootPath), fsStore.getRootPath());
+		SavepointStore store = SavepointStoreFactory.createFromConfig(config);
+		assertTrue(store.getStateStore() instanceof HeapStateStore);
 	}
 
 	@Test
-	public void testStateStoreWithFileSystemBackendButNoDirectory() throws Exception {
+	public void testSavepointBackendFileSystemButNoDirectory() throws Exception {
 		Configuration config = new Configuration();
-
-		String expectedRootPath = System.getProperty("java.io.tmpdir");
-
-		config.setString(ConfigConstants.STATE_BACKEND, "filesystem");
-		config.setString(FsStateBackendFactory.CHECKPOINT_DIRECTORY_URI_CONF_KEY, expectedRootPath);
-
-		SavepointStore store = SavepointStoreFactory
-				.createFromConfig(config);
-
-		assertTrue(store.getStateStore() instanceof FileSystemStateStore);
-
-		FileSystemStateStore fsStore = (FileSystemStateStore) store.getStateStore();
-
-		assertEquals(new Path(expectedRootPath), fsStore.getRootPath());
+		config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "filesystem");
+		SavepointStore store = SavepointStoreFactory.createFromConfig(config);
+		assertTrue(store.getStateStore() instanceof HeapStateStore);
 	}
 
 	@Test
-	public void testStateStoreWithFileSystemButNoDirectoryFallbackToJobManager() throws Exception {
+	public void testUnexpectedSavepointBackend() throws Exception {
 		Configuration config = new Configuration();
-		config.setString(ConfigConstants.STATE_BACKEND, "filesystem");
-
-		SavepointStore store = SavepointStoreFactory
-				.createFromConfig(config);
-
+		config.setString(SavepointStoreFactory.SAVEPOINT_BACKEND_KEY, "unexpected");
+		SavepointStore store = SavepointStoreFactory.createFromConfig(config);
 		assertTrue(store.getStateStore() instanceof HeapStateStore);
 	}
 }
