@@ -532,7 +532,7 @@ public class StreamingJobGraphGenerator {
 			// Generate the hash code. Because multiple path exist to each
 			// node, we might not have all required inputs available to
 			// generate the hash code.
-			if (generateNodeHash(currentNode, hashFunction, hashes, visited)) {
+			if (generateNodeHash(currentNode, hashFunction, hashes)) {
 				// Add the child nodes
 				for (StreamEdge outEdge : currentNode.getOutEdges()) {
 					StreamNode child = outEdge.getTargetVertex();
@@ -559,7 +559,6 @@ public class StreamingJobGraphGenerator {
 	 * @param node         The node to generate the hash for
 	 * @param hashFunction The hash function to use
 	 * @param hashes       The current state of generated hashes
-	 * @param visited      The current state of visited nodes
 	 * @return <code>true</code> if the node hash has been generated.
 	 * <code>false</code>, otherwise. If the operation is not successful, the
 	 * hash needs be generated at a later point when all input is available.
@@ -569,8 +568,7 @@ public class StreamingJobGraphGenerator {
 	private boolean generateNodeHash(
 			StreamNode node,
 			HashFunction hashFunction,
-			Map<Integer, byte[]> hashes,
-			Set<Integer> visited) {
+			Map<Integer, byte[]> hashes) {
 
 		// Check for user-specified ID
 		String userSpecifiedHash = node.getTransformationId();
