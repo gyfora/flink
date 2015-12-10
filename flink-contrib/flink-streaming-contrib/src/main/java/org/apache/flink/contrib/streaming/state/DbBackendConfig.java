@@ -55,6 +55,9 @@ public class DbBackendConfig implements Serializable {
 
 	private Partitioner shardPartitioner;
 
+	private int bfExpectedInserts = -1;
+	private double bfFPP = -1;
+
 	/**
 	 * Creates a new sharded database state backend configuration with the given
 	 * parameters and default {@link MySqlAdapter}.
@@ -306,6 +309,23 @@ public class DbBackendConfig implements Serializable {
 	 */
 	public void setPartitioner(Partitioner partitioner) {
 		this.shardPartitioner = partitioner;
+	}
+
+	public void setBloomFilter(int expectedInsertions, double fpp) {
+		this.bfExpectedInserts = expectedInsertions;
+		this.bfFPP = fpp;
+	}
+
+	public boolean hasBloomFilter() {
+		return bfExpectedInserts > 0;
+	}
+
+	public int getBloomFilterExpectedInserts() {
+		return bfExpectedInserts;
+	}
+
+	public double getBloomFilterFPP() {
+		return bfFPP;
 	}
 
 	/**

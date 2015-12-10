@@ -17,6 +17,8 @@
 
 package org.apache.flink.contrib.streaming.state;
 
+import static org.apache.flink.contrib.streaming.state.SQLRetrier.retry;
+
 import java.io.IOException;
 import java.io.Serializable;
 import java.sql.Connection;
@@ -32,8 +34,6 @@ import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.util.InstantiationUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import static org.apache.flink.contrib.streaming.state.SQLRetrier.retry;
 
 /**
  * {@link StateBackend} for storing checkpoints in JDBC supporting databases.
@@ -148,9 +148,9 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 					// store the checkpoint id and timestamp for bookkeeping
 					long handleId = rnd.nextLong();
 
-					// We use the ApplicationID here, because it is restored when
-					// the job is started from a savepoint (whereas the job ID
-					// changes with each submission).
+					// We use the ApplicationID here, because it is restored
+					// when the job is started from a savepoint (whereas the job
+					// ID changes with each submission).
 					String appIdShort = env.getApplicationID().toShortString();
 
 					dbAdapter.setCheckpointInsertParams(appIdShort, insertStatement,
@@ -172,9 +172,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	public CheckpointStateOutputStream createCheckpointStateOutputStream(long checkpointID, long timestamp)
 			throws Exception {
 		if (nonPartitionedStateBackend == null) {
-			// We don't implement this functionality for the DbStateBackend as
-			// we cannot directly write a stream to the database anyways.
-			throw new UnsupportedOperationException("Use ceckpointStateSerializable instead.");
+			return new DbStateOutputStream(this, checkpointID, timestamp);
 		} else {
 			return nonPartitionedStateBackend.createCheckpointStateOutputStream(checkpointID, timestamp);
 		}
@@ -184,6 +182,7 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	public <K, V> LazyDbKvState<K, V> createKvState(String stateId, String stateName,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
 		return new LazyDbKvState<K, V>(
+				this,
 				stateId + "_" + env.getApplicationID().toShortString(),
 				env.getTaskInfo().getIndexOfThisSubtask() == 0,
 				getConnections(),
@@ -214,7 +213,8 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 		if (nonPartitionedStateBackend == null) {
 			insertStatement = retry(new Callable<PreparedStatement>() {
 				public PreparedStatement call() throws SQLException {
-					dbAdapter.createCheckpointsTable(env.getApplicationID().toShortString(), getConnections().getFirst());
+					dbAdapter.createCheckpointsTable(env.getApplicationID().toShortString(),
+							getConnections().getFirst());
 					return dbAdapter.prepareCheckpointInsert(env.getApplicationID().toShortString(),
 							getConnections().getFirst());
 				}
