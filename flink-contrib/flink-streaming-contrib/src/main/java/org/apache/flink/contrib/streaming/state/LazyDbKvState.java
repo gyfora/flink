@@ -412,6 +412,10 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		private final int cacheSize;
 		private final int evictionSize;
 
+		// Keep some stats for debugging
+		long lookupTime = 0;
+		long lookupCount = 0;
+
 		// We keep track the state modified since the last checkpoint
 		private final Map<K, Optional<V>> modified = new HashMap<>();
 
@@ -464,8 +468,22 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 						byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
 						// We lookup using the adapter and serialize/deserialize
 						// with the TypeSerializers
+						long start = System.nanoTime();
+
 						byte[] serializedVal = dbAdapter.lookupKey(kvStateId,
 								selectStatements.getForKey(key), serializedKey, nextTs);
+
+						if (LOG.isDebugEnabled()) {
+							lookupTime += (System.nanoTime() - start) / 1000000;
+							lookupCount++;
+
+							if (lookupCount % 10000 == 0) {
+								LOG.debug("Total lookup time (numRecords, lookupTime(ms)): ({},{})",
+										lookupCount, lookupTime);
+								lookupCount = 0;
+								lookupTime = 0;
+							}
+						}
 
 						return serializedVal != null
 								? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
