@@ -37,7 +37,6 @@ import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -85,9 +84,10 @@ public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
 				"jdbc:derby://localhost:1526/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true");
 		conf.setDbAdapter(new DerbyAdapter());
 		conf.setKvStateCompactionFrequency(2);
+		conf.setBloomFilter(1000, 0.01);
 
 		// We store the non-partitioned states (source offset) in-memory
-		DbStateBackend backend = new DbStateBackend(conf, new MemoryStateBackend());
+		DbStateBackend backend = new DbStateBackend(conf);
 
 		env.setStateBackend(backend);
 

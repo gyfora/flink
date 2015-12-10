@@ -20,6 +20,7 @@ package org.apache.flink.contrib.streaming.state;
 import static org.apache.flink.contrib.streaming.state.SQLRetrier.retry;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -38,12 +39,15 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.ShardedConnection.ShardedStatement;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
+import org.apache.flink.runtime.state.StateBackend.CheckpointStateOutputStream;
+import org.apache.flink.runtime.state.StreamStateHandle;
 import org.apache.flink.streaming.api.checkpoint.CheckpointNotifier;
 import org.apache.flink.util.InstantiationUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Optional;
+import com.google.common.hash.BloomFilter;
 
 /**
  * 
@@ -56,6 +60,8 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	private static final Logger LOG = LoggerFactory.getLogger(LazyDbKvState.class);
 
 	// ------------------------------------------------------
+
+	private final DbStateBackend backend;
 
 	// Unique id for this state (appID_operatorID_stateName)
 	private final String kvStateId;
@@ -102,24 +108,30 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 	private volatile long lastCompactedTs;
 
+	private BloomFilter<byte[]> bloomFilter = null;
+
 	// ------------------------------------------------------
 
 	/**
 	 * Constructor to initialize the {@link LazyDbKvState} the first time the
 	 * job starts.
 	 */
-	public LazyDbKvState(String kvStateId, boolean compact, ShardedConnection cons, DbBackendConfig conf,
+	public LazyDbKvState(DbStateBackend backend, String kvStateId, boolean compact, ShardedConnection cons,
+			DbBackendConfig conf,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
-		this(kvStateId, compact, cons, conf, keySerializer, valueSerializer, defaultValue, 1, 0);
+		this(backend, kvStateId, compact, cons, conf, keySerializer, valueSerializer, defaultValue, 1, 0, null);
 	}
 
 	/**
 	 * Initialize the {@link LazyDbKvState} from a snapshot.
 	 */
-	public LazyDbKvState(String kvStateId, boolean compact, ShardedConnection cons, final DbBackendConfig conf,
+	public LazyDbKvState(DbStateBackend backend, String kvStateId, boolean compact, ShardedConnection cons,
+			final DbBackendConfig conf,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue, long nextTs,
-			long lastCompactedTs)
+			long lastCompactedTs, BloomFilter<byte[]> restoredFilter)
 					throws IOException {
+
+		this.backend = backend;
 
 		this.kvStateId = kvStateId;
 		this.compact = compact;
@@ -148,6 +160,18 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		initDB(this.connections);
 
 		batchInsert = new BatchInserter(connections.getNumShards());
+
+		// If the kvstate is restored from a checkpoint that had a bloomfilter
+		// we use that, otherwise create (or not) based in the config
+		if (restoredFilter != null && conf.hasBloomFilter()) {
+			bloomFilter = restoredFilter;
+		} else if (conf.hasBloomFilter()) {
+			bloomFilter = BloomFilter.create(new KeyFunnel(), conf.getBloomFilterExpectedInserts(),
+					conf.getBloomFilterFPP());
+
+			LOG.debug("Bloomfilter created for kv-state {} with fpp={} for expectedInserts={}", kvStateId,
+					conf.getBloomFilterFPP(), conf.getBloomFilterExpectedInserts());
+		}
 
 		if (LOG.isDebugEnabled()) {
 			LOG.debug("Lazy database kv-state ({}) successfully initialized", kvStateId);
@@ -186,7 +210,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	}
 
 	@Override
-	public DbKvStateSnapshot<K, V> snapshot(long checkpointId, long timestamp) throws IOException {
+	public DbKvStateSnapshot<K, V> snapshot(long checkpointId, long timestamp) throws Exception {
 
 		// Validate timing assumptions
 		if (timestamp <= nextTs) {
@@ -219,7 +243,19 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 		nextTs = timestamp + 1;
 		completedCheckpoints.put(checkpointId, timestamp);
-		return new DbKvStateSnapshot<K, V>(kvStateId, timestamp, lastCompactedTs);
+
+		// If the bloomfilter is enabled we need to checkpoint that
+		StreamStateHandle filterCheckpoint = null;
+
+		if (bloomFilter != null) {
+			// We use the efficient serialization of the bloomfilter instead of
+			// Java serialization
+			CheckpointStateOutputStream cpStream = backend.createCheckpointStateOutputStream(checkpointId, timestamp);
+			bloomFilter.writeTo(cpStream);
+			filterCheckpoint = cpStream.closeAndGetHandle();
+		}
+
+		return new DbKvStateSnapshot<K, V>(kvStateId, timestamp, lastCompactedTs, filterCheckpoint);
 	}
 
 	/**
@@ -341,16 +377,21 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		private final long checkpointTimestamp;
 		private final long lastCompactedTimestamp;
 
-		public DbKvStateSnapshot(String kvStateId, long checkpointTimestamp, long lastCompactedTs) {
+		// This field might be null if the state has no bloomfilter
+		private final StreamStateHandle bloomFilterHandle;
+
+		public DbKvStateSnapshot(String kvStateId, long checkpointTimestamp, long lastCompactedTs,
+				StreamStateHandle bloomFilterHandle) {
 			this.checkpointTimestamp = checkpointTimestamp;
 			this.kvStateId = kvStateId;
 			this.lastCompactedTimestamp = lastCompactedTs;
+			this.bloomFilterHandle = bloomFilterHandle;
 		}
 
 		@Override
 		public LazyDbKvState<K, V> restoreState(final DbStateBackend stateBackend,
 				final TypeSerializer<K> keySerializer, final TypeSerializer<V> valueSerializer, final V defaultValue,
-				ClassLoader classLoader, final long recoveryTimestamp) throws IOException {
+				ClassLoader cl, final long recoveryTimestamp) throws Exception {
 
 			// Validate timing assumptions
 			if (recoveryTimestamp <= checkpointTimestamp) {
@@ -379,10 +420,19 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 			boolean compactor = stateBackend.getEnvironment().getTaskInfo().getIndexOfThisSubtask() == 0;
 
+			// If we checkpointed the bloomfilter we restore it from the input
+			// stream
+			BloomFilter<byte[]> restoredFilter = null;
+			if (bloomFilterHandle != null) {
+				InputStream in = bloomFilterHandle.getState(cl);
+				restoredFilter = BloomFilter.readFrom(in, new KeyFunnel());
+				LOG.debug("Restored bloomfilter for {}", kvStateId);
+			}
+
 			// Restore the KvState
-			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(kvStateId, compactor,
+			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(stateBackend, kvStateId, compactor,
 					stateBackend.getConnections(), stateBackend.getConfiguration(), keySerializer, valueSerializer,
-					defaultValue, recoveryTimestamp, lastCompactedTimestamp);
+					defaultValue, recoveryTimestamp, lastCompactedTimestamp, restoredFilter);
 
 			if (LOG.isDebugEnabled()) {
 				LOG.debug("KV state({},{}) restored.", kvStateId, recoveryTimestamp);
@@ -466,18 +516,24 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		 */
 		private V getFromDatabaseOrNull(final K key) {
 			try {
-				return retry(new Callable<V>() {
-					public V call() throws Exception {
-						byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
-						// We lookup using the adapter and serialize/deserialize
-						// with the TypeSerializers
-						byte[] serializedVal = dbAdapter.lookupKey(kvStateId,
-								selectStatements.getForKey(key), serializedKey, nextTs);
+				final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
 
-						return serializedVal != null
-								? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
-					}
-				}, numSqlRetries, sqlRetrySleep);
+				boolean dbMightContain = bloomFilter == null || !bloomFilter.put(serializedKey);
+
+				if (dbMightContain) {
+					return retry(new Callable<V>() {
+						public V call() throws Exception {
+							byte[] serializedVal = dbAdapter.lookupKey(kvStateId,
+									selectStatements.getForKey(key), serializedKey, nextTs);
+
+							return serializedVal != null
+									? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
+						}
+					}, numSqlRetries, sqlRetrySleep);
+				} else {
+					return null;
+				}
+
 			} catch (Exception e) {
 				// We need to re-throw this exception to conform to the map
 				// interface, we will catch this when we call the the put/get
