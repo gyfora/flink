@@ -90,6 +90,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepoint;
 import static org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepointFailure;
@@ -699,11 +700,14 @@ public class CliFrontend {
 	private int triggerSavepoint(SavepointOptions options, JobID jobId) {
 		try {
 			ActorGateway jobManager = getJobManagerGateway(options);
-			Future<Object> response = jobManager.ask(new TriggerSavepoint(jobId), askTimeout);
+
+			logAndSysout("Triggering savepoint for job " + jobId + ".");
+			Future<Object> response = jobManager.ask(new TriggerSavepoint(jobId),
+					new FiniteDuration(1, TimeUnit.HOURS));
 
 			Object result;
 			try {
-				logAndSysout("Triggering savepoint for job " + jobId + ". Waiting for response...");
+				logAndSysout("Waiting for response...");
 				result = Await.result(response, FiniteDuration.Inf());
 			}
 			catch (Exception e) {
@@ -738,11 +742,12 @@ public class CliFrontend {
 	private int disposeSavepoint(SavepointOptions options, String savepointPath) {
 		try {
 			ActorGateway jobManager = getJobManagerGateway(options);
+			logAndSysout("Disposing savepoint '" + savepointPath + "'.");
 			Future<Object> response = jobManager.ask(new DisposeSavepoint(savepointPath), askTimeout);
 
 			Object result;
 			try {
-				logAndSysout("Disposing savepoint '" + savepointPath + "'. Waiting for response...");
+				logAndSysout("Waiting for response...");
 				result = Await.result(response, askTimeout);
 			}
 			catch (Exception e) {
