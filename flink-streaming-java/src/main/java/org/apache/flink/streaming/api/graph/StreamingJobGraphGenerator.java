@@ -54,6 +54,7 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -607,7 +608,20 @@ public class StreamingJobGraphGenerator {
 
 			Hasher hasher = hashFunction.newHasher();
 			byte[] hash = generateUserSpecifiedHash(node, hasher);
-			hashes.put(node.getId(), hash);
+
+			for (byte[] previousHash : hashes.values()) {
+				if (Arrays.equals(previousHash, hash)) {
+					throw new IllegalArgumentException("Hash collision on user-specified ID. " +
+							"Most likely cause is a non-unique ID. Please check that all IDs " +
+							"specified via `uid(String)` are unique.");
+				}
+			}
+
+			if (hashes.put(node.getId(), hash) != null) {
+				// Sanity check
+				throw new IllegalStateException("Unexpected state. Tried to add node hash " +
+						"twice. This is probably a bug in the JobGraph generator.");
+			}
 
 			return true;
 		}
