@@ -507,19 +507,20 @@ public class StreamingJobGraphGenerator {
 		Set<Integer> visited = new HashSet<>();
 		Queue<StreamNode> remaining = new ArrayDeque<>();
 
-		// We need to make the source order deterministic. This depends on the
-		// ordering of the sources in the Environment, e.g. if a source X is
-		// added before source Y, X will have a lower ID than Y (assigned by a
-		// static counter).
+		// We need to make the source order deterministic. The source IDs are
+		// not returned in the same order, which means that submitting the same
+		// program twice might result in different traversal, which breaks the
+		// deterministic hash assignment.
 		List<Integer> sources = new ArrayList<>();
 		for (Integer sourceNodeId : streamGraph.getSourceIDs()) {
 			sources.add(sourceNodeId);
 		}
-
 		Collections.sort(sources);
 
+		//
 		// Traverse the graph in a breadth-first manner. Keep in mind that
 		// the graph is not a tree and multiple paths to nodes can exist.
+		//
 
 		// Start with source nodes
 		for (Integer sourceNodeId : sources) {
@@ -630,13 +631,19 @@ public class StreamingJobGraphGenerator {
 			Hasher hasher,
 			Map<Integer, byte[]> hashes) {
 
-		// Include stream node to hash
+		// Include stream node to hash. We use the current size of the computed
+		// hashes as the ID. We cannot use the node's ID, because it is
+		// assigned from a static counter. This will result in two identical
+		// programs having different hashes.
 		generateNodeLocalHash(node, hasher, hashes.size());
 
 		// Include chained nodes to hash
 		for (StreamEdge outEdge : node.getOutEdges()) {
 			if (isChainable(outEdge)) {
 				StreamNode chainedNode = outEdge.getTargetVertex();
+
+				// Use the hash size again, because the nodes are chained to
+				// this node.
 				generateNodeLocalHash(chainedNode, hasher, hashes.size());
 			}
 		}
