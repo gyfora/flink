@@ -169,7 +169,7 @@ public class SavepointITCase extends TestLogger {
 			LOG.info("JobManager: " + jobManager + ".");
 
 			// Submit the job
-			final JobGraph jobGraph = createJobGraph(parallelism, 1000);
+			final JobGraph jobGraph = createJobGraph(parallelism, 0, 1000);
 			final JobID jobId = jobGraph.getJobID();
 
 			// Wait for the source to be notified about the expected number
@@ -462,7 +462,7 @@ public class SavepointITCase extends TestLogger {
 			LOG.info("JobManager: " + jobManager + ".");
 
 			// Submit the job
-			final JobGraph jobGraph = createJobGraph(parallelism, 1000);
+			final JobGraph jobGraph = createJobGraph(parallelism, 0, 1000);
 			final JobID jobId = jobGraph.getJobID();
 
 			// Wait for the source to be notified about the expected number
@@ -598,7 +598,7 @@ public class SavepointITCase extends TestLogger {
 			LOG.info("JobManager: " + jobManager + ".");
 
 			// Submit the job
-			final JobGraph jobGraph = createJobGraph(parallelism, 1000);
+			final JobGraph jobGraph = createJobGraph(parallelism, 0, 1000);
 			final JobID jobId = jobGraph.getJobID();
 
 			// Wait for the source to be notified about the expected number
@@ -685,6 +685,62 @@ public class SavepointITCase extends TestLogger {
 		}
 	}
 
+	@Test
+	public void testSubmitWithUnknownSavepointPath() throws Exception {
+		// Config
+		int numTaskManagers = 1;
+		int numSlotsPerTaskManager = 1;
+		int parallelism = numTaskManagers * numSlotsPerTaskManager;
+
+		// Test deadline
+		final Deadline deadline = new FiniteDuration(5, TimeUnit.MINUTES).fromNow();
+
+		ForkableFlinkMiniCluster flink = null;
+
+		try {
+			// Flink configuration
+			final Configuration config = new Configuration();
+			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTaskManagers);
+			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, numSlotsPerTaskManager);
+
+			// Long delay to ensure that the test times out if the job
+			// manager tries to restart the job.
+			config.setString(ConfigConstants.DEFAULT_EXECUTION_RETRY_DELAY_KEY, "1 hour");
+
+			LOG.info("Flink configuration: " + config + ".");
+
+			// Start Flink
+			flink = new ForkableFlinkMiniCluster(config);
+			LOG.info("Starting Flink cluster.");
+			flink.start();
+
+			// Retrieve the job manager
+			LOG.info("Retrieving JobManager.");
+			ActorGateway jobManager = Await.result(
+					flink.leaderGateway().future(),
+					deadline.timeLeft());
+			LOG.info("JobManager: " + jobManager + ".");
+
+			// High value to ensure timeouts if restarted.
+			int numberOfRetries = 1000;
+			// Submit the job
+			final JobGraph jobGraph = createJobGraph(parallelism, numberOfRetries, 1000);
+
+			// Set non-existing savepoint path
+			jobGraph.setSavepointPath("unknown path");
+			assertEquals("unknown path", jobGraph.getSnapshotSettings().getSavepointPath());
+
+			LOG.info("Submitting job " + jobGraph.getJobID() + " in detached mode.");
+
+			flink.submitJobAndWait(jobGraph, true);
+		}
+		finally {
+			if (flink != null) {
+				flink.shutdown();
+			}
+		}
+	}
+
 	// ------------------------------------------------------------------------
 	// Test program
 	// ------------------------------------------------------------------------
@@ -694,11 +750,12 @@ public class SavepointITCase extends TestLogger {
 	 */
 	private JobGraph createJobGraph(
 			int parallelism,
+			int numberOfRetries,
 			int checkpointingInterval) {
 
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 		env.setParallelism(parallelism);
-		env.setNumberOfExecutionRetries(0);
+		env.setNumberOfExecutionRetries(numberOfRetries);
 		env.enableCheckpointing(checkpointingInterval);
 		env.disableOperatorChaining();
 		env.getConfig().disableSysoutLogging();
