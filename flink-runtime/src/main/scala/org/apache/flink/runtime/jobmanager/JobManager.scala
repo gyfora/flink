@@ -34,6 +34,7 @@ import org.apache.flink.runtime.akka.{AkkaUtils, ListeningBehaviour}
 import org.apache.flink.runtime.blob.BlobServer
 import org.apache.flink.runtime.checkpoint._
 import org.apache.flink.runtime.client._
+import org.apache.flink.runtime.execution.UnrecoverableException
 import org.apache.flink.runtime.execution.librarycache.BlobLibraryCacheManager
 import org.apache.flink.runtime.executiongraph.{ExecutionGraph, ExecutionJobVertex}
 import org.apache.flink.runtime.instance.{AkkaActorGateway, InstanceManager}
@@ -1067,7 +1068,12 @@ class JobManager(
 
               // Reset state back to savepoint
               if (savepointPath != null) {
-                executionGraph.restoreSavepoint(savepointPath)
+                try {
+                  executionGraph.restoreSavepoint(savepointPath)
+                } catch {
+                  case e: Exception =>
+                    throw new UnrecoverableException(e)
+                }
               }
             }
 
