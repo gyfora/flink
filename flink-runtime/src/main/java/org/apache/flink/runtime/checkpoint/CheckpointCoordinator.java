@@ -503,6 +503,13 @@ public class CheckpointCoordinator {
 	/**
 	 * Receives an AcknowledgeCheckpoint message and returns whether the
 	 * message was associated with a pending checkpoint.
+	 *
+	 * @param message Checkpoint ack from the task manager
+	 *
+	 * @return Flag indicating whether the ack'd checkpoint was associated
+	 * with a pending checkpoint.
+	 *
+	 * @throws Exception If the checkpoint cannot be added to the completed checkpoint store.
 	 */
 	public boolean receiveAcknowledgeMessage(AcknowledgeCheckpoint message) throws Exception {
 		if (shutdown || message == null) {

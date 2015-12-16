@@ -543,7 +543,8 @@ class JobManager(
 
                   // Failure, respond with the cause
                   case scala.util.Failure(t) =>
-                    senderRef ! TriggerSavepointFailure(jobId,
+                    senderRef ! TriggerSavepointFailure(
+                      jobId,
                       new Exception("Failed to complete savepoint", t))
                 }(context.dispatcher)
               } catch {
