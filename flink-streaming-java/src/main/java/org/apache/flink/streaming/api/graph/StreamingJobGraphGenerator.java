@@ -588,7 +588,12 @@ public class StreamingJobGraphGenerator {
 
 			Hasher hasher = hashFunction.newHasher();
 			byte[] hash = generateDeterministicHash(node, hasher, hashes);
-			hashes.put(node.getId(), hash);
+
+			if (hashes.put(node.getId(), hash) != null) {
+				// Sanity check
+				throw new IllegalStateException("Unexpected state. Tried to add node hash " +
+						"twice. This is probably a bug in the JobGraph generator.");
+			}
 
 			return true;
 		}
@@ -657,7 +662,7 @@ public class StreamingJobGraphGenerator {
 				StreamNode chainedNode = outEdge.getTargetVertex();
 
 				// Use the hash size again, because the nodes are chained to
-				// this node.
+				// this node. This does not add a hash for the chained nodes.
 				generateNodeLocalHash(chainedNode, hasher, hashes.size());
 			}
 		}
