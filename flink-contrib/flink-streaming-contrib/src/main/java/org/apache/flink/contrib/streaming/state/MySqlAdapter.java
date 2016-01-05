@@ -48,14 +48,42 @@ public class MySqlAdapter implements DbAdapter {
 	private final long SLEEP_BETWEEN_CLEANUP_CHECKS = 3000;
 	private long maxWaitForCleanup = 120000;
 	private boolean cleanupDisabled = false;
+	private boolean secondaryIndex = true;
 
-	public MySqlAdapter setMaxCleanupWaitTime(long millis) {
+	/**
+	 * Sets the cleanup timeout for the adapter. This might be necessary for
+	 * extreme state sizes. If the deletion of records takes longer than the
+	 * given time, the job fails and is restarted.
+	 * 
+	 * @param millis
+	 *            Timeout in milliseconds
+	 * 
+	 */
+	public MySqlAdapter setCleanupTimeout(long millis) {
 		this.maxWaitForCleanup = millis;
 		return this;
 	}
 
+	/**
+	 * Disable cleanup for the adapter. This makes recovery very fast but also
+	 * breaks the exactly-once semantics. The {@link DbStateBackend} without
+	 * cleanup provides at-least-once state update semantics.
+	 * 
+	 */
 	public MySqlAdapter disableCleanup() {
+		disableSecondaryIndexForCleanup();
 		this.cleanupDisabled = true;
+		return this;
+	}
+
+	/**
+	 * Disables the secondary index on the timestamp in the database table. This
+	 * will slow down recovery but will increase insert performance and reduce
+	 * the space requirements.
+	 * 
+	 */
+	public MySqlAdapter disableSecondaryIndexForCleanup() {
+		this.secondaryIndex = false;
 		return this;
 	}
 
@@ -92,7 +120,7 @@ public class MySqlAdapter implements DbAdapter {
 
 	@Override
 	public void setCheckpointInsertParams(String appId, PreparedStatement insertStatement, long checkpointId,
-										long timestamp, long handleId, byte[] checkpoint) throws SQLException {
+			long timestamp, long handleId, byte[] checkpoint) throws SQLException {
 		insertStatement.setLong(1, checkpointId);
 		insertStatement.setLong(2, timestamp);
 		insertStatement.setLong(3, handleId);
@@ -148,7 +176,8 @@ public class MySqlAdapter implements DbAdapter {
 								+ "timestamp bigint, "
 								+ "k varbinary(256), "
 								+ "v longblob, "
-								+ "PRIMARY KEY (k, timestamp) "
+								+ "PRIMARY KEY (k, timestamp)"
+								+ (secondaryIndex ? ", KEY (timestamp)" : "")
 								+ ")");
 			}
 			LOG.debug("KV checkpoint table created for {}", stateId);
