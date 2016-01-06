@@ -18,25 +18,35 @@
 
 package org.apache.flink.contrib.streaming.state.hdfs;
 
+import java.io.DataInputStream;
 import java.io.IOException;
 
+import org.apache.flink.contrib.streaming.state.KeyFunnel;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.file.tfile.TFile.Reader;
 import org.apache.hadoop.io.file.tfile.TFile.Reader.Scanner;
 
+import com.google.common.hash.BloomFilter;
+
 public class CheckpointReader implements AutoCloseable {
 
 	private Reader reader;
 	private Scanner scanner;
+	private BloomFilter<byte[]> bf;
 
 	public CheckpointReader(Path path, FileSystem fs) throws IOException {
 		reader = new Reader(fs.open(path), fs.getFileStatus(path).getLen(), fs.getConf());
 		scanner = reader.createScanner();
+
+		DataInputStream bi = reader.getMetaBlock("bloomfilter");
+		bf = BloomFilter.readFrom(bi, new KeyFunnel());
+		bi.close();
 	}
 
 	public byte[] lookup(byte[] key) throws IOException {
-		if (scanner.seekTo(key)) {
+		boolean mightContain = bf.mightContain(key);
+		if (mightContain && scanner.seekTo(key)) {
 			int valueLen = scanner.entry().getValueLength();
 			byte[] read = new byte[valueLen];
 			scanner.entry().getValue(read);

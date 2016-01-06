@@ -86,6 +86,7 @@ public class TfileTest {
 
 		try (KeyScanner r = new KeyScanner(fs, Lists.newArrayList(cpFile3, cpFile2, cpFile1))) {
 			System.out.println(Arrays.toString(r.lookup(new byte[8])));
+			System.out.println(Arrays.toString(r.lookup(new byte[10])));
 			System.out.println(Arrays.toString(r.lookup(new byte[1])));
 			System.out.println(Arrays.toString(r.lookup(new byte[2])));
 			System.out.println(Arrays.toString(r.lookup(new byte[6])));
@@ -96,6 +97,46 @@ public class TfileTest {
 		FileSystem.get(new Configuration()).delete(cpFile1);
 		FileSystem.get(new Configuration()).delete(cpFile2);
 		FileSystem.get(new Configuration()).delete(cpFile1);
+	}
+
+	private static void testBasic2() throws IOException {
+
+		FileSystem fs = FileSystem.get(new Configuration());
+
+		Path cpFile1 = new Path("/Users/gyulafora/Test", "basic.tfile1");
+
+		Map<byte[], byte[]> kvs = new HashMap<>();
+
+		kvs.put(new byte[1], new byte[1]);
+		kvs.put(new byte[2], new byte[4]);
+
+		try (CheckpointWriter w = new CheckpointWriter(cpFile1, fs)) {
+			w.writeUnsorted(kvs);
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+
+		kvs.clear();
+
+		kvs.put(new byte[1], new byte[2]);
+
+		try (CheckpointWriter w = new CheckpointWriter(cpFile1, fs)) {
+			w.writeUnsorted(kvs);
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+
+		kvs.clear();
+
+		try (KeyScanner r = new KeyScanner(fs, Lists.newArrayList(cpFile1))) {
+			System.out.println(Arrays.toString(r.lookup(new byte[1])));
+			System.out.println(Arrays.toString(r.lookup(new byte[2])));
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+
+		FileSystem.get(new Configuration()).delete(cpFile1);
+
 	}
 
 	private static void testFileCreation() throws IOException {
@@ -111,7 +152,8 @@ public class TfileTest {
 	}
 
 	private static void testState() throws Exception {
-		TFileKvState<Integer, String> state = new TFileKvState<>(FileSystem.get(new Configuration()),
+		TFileKvState<Integer, String> state = new TFileKvState<>(new KvStateConfig(),
+				FileSystem.get(new Configuration()),
 				new Path("/Users/gyulafora/Test"),
 				new ArrayList<Path>(),
 				IntSerializer.INSTANCE, StringSerializer.INSTANCE, "a", 0);
@@ -159,7 +201,8 @@ public class TfileTest {
 
 		Random rnd = new Random();
 
-		TFileKvState<Integer, String> state = new TFileKvState<>(FileSystem.get(new Configuration()),
+		TFileKvState<Integer, String> state = new TFileKvState<>(new KvStateConfig(1000000, 0.5f),
+				FileSystem.get(new Configuration()),
 				new Path("/Users/gyulafora/Test"),
 				new ArrayList<Path>(),
 				IntSerializer.INSTANCE, StringSerializer.INSTANCE, "a",
@@ -168,19 +211,29 @@ public class TfileTest {
 		long start = System.nanoTime();
 
 		for (int i = 0; i < 10000000; i++) {
-			state.setCurrentKey(rnd.nextInt(100000000));
+			state.setCurrentKey(rnd.nextInt(10000000));
 			state.update(String.valueOf(i));
 		}
 
 		state.snapshot(2, rnd.nextLong());
+		System.out.println("Insert Time: " + (System.nanoTime() - start) / (1000000 * 1000) + " s");
 
-		System.out.println("Time: " + (System.nanoTime() - start) / (1000000 * 1000) + " s");
+		start = System.nanoTime();
+
+		state.getCache().clear();
+		for (int i = 0; i < 1000000; i++) {
+			state.setCurrentKey(rnd.nextInt(10000000));
+			state.value();
+		}
+
+		System.out.println("Lookup Time: " + (System.nanoTime() - start) / (1000000 * 1000) + " s");
+
 	}
 
 	public static void main(String[] args) throws Exception {
-		// testBasic();
+		testBasic2();
 		// testFileCreation();
 		// testState();
-		benchmark();
+		// benchmark();
 	}
 }

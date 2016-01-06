@@ -31,7 +31,7 @@ import com.google.common.collect.Lists;
  * shard and connect to the databases that will store the state checkpoints.
  *
  */
-public class DbBackendConfig implements Serializable {
+public class DbBackendConfig extends KvStateConfig {
 
 	private static final long serialVersionUID = 1L;
 
@@ -47,16 +47,10 @@ public class DbBackendConfig implements Serializable {
 	private int maxNumberOfSqlRetries = 5;
 	private int sleepBetweenSqlRetries = 100;
 
-	// KvState properties
-	private int kvStateCacheSize = 10000;
-	private int maxKvInsertBatchSize = 1000;
-	private float maxKvEvictFraction = 0.1f;
+	protected int maxKvInsertBatchSize = 1000;
 	private int kvStateCompactionFreq = -1;
 
 	private Partitioner shardPartitioner;
-
-	private int bfExpectedInserts = -1;
-	private double bfFPP = -1;
 
 	/**
 	 * Creates a new sharded database state backend configuration with the given
@@ -185,26 +179,6 @@ public class DbBackendConfig implements Serializable {
 	}
 
 	/**
-	 * The maximum number of key-value pairs stored in one task instance's cache
-	 * before evicting to the underlying database.
-	 *
-	 */
-	public int getKvCacheSize() {
-		return kvStateCacheSize;
-	}
-
-	/**
-	 * Set the maximum number of key-value pairs stored in one task instance's
-	 * cache before evicting to the underlying database. When the cache is full
-	 * the N least recently used keys will be evicted to the database, where N =
-	 * maxKvEvictFraction*KvCacheSize.
-	 *
-	 */
-	public void setKvCacheSize(int size) {
-		kvStateCacheSize = size;
-	}
-
-	/**
 	 * The maximum number of key-value pairs inserted in the database as one
 	 * batch operation.
 	 */
@@ -218,34 +192,6 @@ public class DbBackendConfig implements Serializable {
 	 */
 	public void setMaxKvInsertBatchSize(int size) {
 		maxKvInsertBatchSize = size;
-	}
-
-	/**
-	 * Sets the maximum fraction of key-value states evicted from the cache if
-	 * the cache is full.
-	 */
-	public void setMaxKvCacheEvictFraction(float fraction) {
-		if (fraction > 1 || fraction <= 0) {
-			throw new RuntimeException("Must be a number between 0 and 1");
-		} else {
-			maxKvEvictFraction = fraction;
-		}
-	}
-
-	/**
-	 * The maximum fraction of key-value states evicted from the cache if the
-	 * cache is full.
-	 */
-	public float getMaxKvCacheEvictFraction() {
-		return maxKvEvictFraction;
-	}
-
-	/**
-	 * The number of elements that will be evicted when the cache is full.
-	 * 
-	 */
-	public int getNumElementsToEvict() {
-		return (int) Math.ceil(getKvCacheSize() * getMaxKvCacheEvictFraction());
 	}
 
 	/**
@@ -309,23 +255,6 @@ public class DbBackendConfig implements Serializable {
 	 */
 	public void setPartitioner(Partitioner partitioner) {
 		this.shardPartitioner = partitioner;
-	}
-
-	public void setBloomFilter(int expectedInsertions, double fpp) {
-		this.bfExpectedInserts = expectedInsertions;
-		this.bfFPP = fpp;
-	}
-
-	public boolean hasBloomFilter() {
-		return bfExpectedInserts > 0;
-	}
-
-	public int getBloomFilterExpectedInserts() {
-		return bfExpectedInserts;
-	}
-
-	public double getBloomFilterFPP() {
-		return bfFPP;
 	}
 
 	/**

@@ -31,7 +31,6 @@ import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.contrib.streaming.state.hdfs.TFileStateBackend;
-import org.apache.flink.core.fs.Path;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -51,7 +50,7 @@ public class TfileStateCheckpointingTest extends StreamFaultToleranceTestBase {
 		env.enableCheckpointing(500);
 
 		try {
-			env.setStateBackend(new TFileStateBackend(new Path("file:///Users/gyulafora/Test")));
+			env.setStateBackend(new TFileStateBackend("file:///Users/gyulafora/Test", new KvStateConfig(5000, 0.5f)));
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -124,7 +123,7 @@ public class TfileStateCheckpointingTest extends StreamFaultToleranceTestBase {
 					ctx.collect(index % NUM_KEYS);
 				}
 
-				if (rnd.nextDouble() < 0.008) {
+				if (rnd.nextDouble() < 0.025) {
 					Thread.sleep(1);
 				}
 			}

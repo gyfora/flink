@@ -34,6 +34,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -48,7 +49,7 @@ import com.google.common.primitives.UnsignedBytes;
 
 public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 
-	private static final byte[] TOMBSTONE = new byte[0];
+	private final KvStateConfig conf;
 
 	private final TypeSerializer<K> keySerializer;
 	private final TypeSerializer<V> valueSerializer;
@@ -66,6 +67,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 	private long nextTs = 0;
 
 	public TFileKvState(
+			KvStateConfig kvStateConf,
 			FileSystem fs,
 			Path cpParentDir,
 			List<Path> cpFiles,
@@ -73,6 +75,8 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			TypeSerializer<V> valueSerializer,
 			V defaultValue,
 			long nextTs) {
+
+		this.conf = kvStateConf;
 
 		this.keySerializer = keySerializer;
 		this.valueSerializer = valueSerializer;
@@ -82,7 +86,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		this.nextTs = nextTs;
 
 		this.cpParentDir = cpParentDir;
-		this.cache = new StateCache(1000000, 1000000);
+		this.cache = new StateCache(kvStateConf.getKvCacheSize(), conf.getNumElementsToEvict());
 
 		List<Path> sortedCpFiles = new ArrayList<>(cpFiles);
 		Collections.sort(cpFiles, new Comparator<Path>() {
@@ -167,7 +171,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			Optional<V> val = entry.getValue();
 			sortedKVs.put(
 					InstantiationUtil.serializeToByteArray(keySerializer, entry.getKey()),
-					val.isPresent() ? InstantiationUtil.serializeToByteArray(valueSerializer, val.get()) : TOMBSTONE);
+					val.isPresent() ? InstantiationUtil.serializeToByteArray(valueSerializer, val.get()) : new byte[0]);
 		}
 
 		return sortedKVs;
@@ -325,7 +329,10 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		public KvState<K, V, FsStateBackend> restoreState(FsStateBackend stateBackend, TypeSerializer<K> keySerializer,
 				TypeSerializer<V> valueSerializer, V defaultValue, ClassLoader classLoader, long recoveryTimestamp)
 						throws Exception {
-			return new TFileKvState<>(((TFileStateBackend) stateBackend).getHadoopFileSystem(), new Path(cpParentDir),
+			
+			TFileStateBackend backend = (TFileStateBackend) stateBackend;
+			
+			return new TFileKvState<>(backend.getKvStateConf(), backend.getHadoopFileSystem(), new Path(cpParentDir),
 					Lists.transform(paths, new Function<URI, Path>() {
 
 						@Override

@@ -18,17 +18,20 @@
 
 package org.apache.flink.contrib.streaming.state.hdfs;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
+import org.apache.flink.contrib.streaming.state.KeyFunnel;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.file.tfile.TFile.Writer;
 
+import com.google.common.hash.BloomFilter;
 import com.google.common.primitives.UnsignedBytes;
 
 public class CheckpointWriter implements AutoCloseable {
@@ -44,9 +47,17 @@ public class CheckpointWriter implements AutoCloseable {
 	}
 
 	public void writeSorted(SortedMap<byte[], byte[]> kvPairs) throws IOException {
+
+		BloomFilter<byte[]> bf = BloomFilter.create(new KeyFunnel(), 1000000, 0.0001);
+
 		for (Entry<byte[], byte[]> kv : kvPairs.entrySet()) {
+			bf.put(kv.getKey());
 			writer.append(kv.getKey(), kv.getValue());
 		}
+
+		DataOutputStream mo = writer.prepareMetaBlock("bloomfilter");
+		bf.writeTo(mo);
+		mo.close();
 	}
 
 	public void writeUnsorted(Map<byte[], byte[]> kvPairs) throws IOException {

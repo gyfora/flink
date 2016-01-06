@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -36,9 +37,17 @@ public class TFileStateBackend extends FsStateBackend {
 	private transient Path checkpointDir;
 	private transient FileSystem fs;
 	private transient Environment env;
+	private KvStateConfig kvStateConf;
 
-	public TFileStateBackend(org.apache.flink.core.fs.Path checkpointDataUri) throws IOException {
+	public TFileStateBackend(String checkpointDataUri, KvStateConfig kvStateConf) throws IOException {
 		super(checkpointDataUri);
+		this.kvStateConf = kvStateConf;
+	}
+
+	public TFileStateBackend(org.apache.flink.core.fs.Path checkpointDataUri, KvStateConfig kvStateConf)
+			throws IOException {
+		super(checkpointDataUri);
+		this.kvStateConf = kvStateConf;
 	}
 
 	@Override
@@ -46,7 +55,8 @@ public class TFileStateBackend extends FsStateBackend {
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception {
 		Path p = new Path(new Path(checkpointDir, String.valueOf(env.getTaskInfo().getIndexOfThisSubtask())), stateId);
 		fs.mkdirs(p);
-		return new TFileKvState<K, V>(fs, p, new ArrayList<Path>(), keySerializer, valueSerializer, defaultValue, 0);
+		return new TFileKvState<K, V>(kvStateConf, fs, p, new ArrayList<Path>(), keySerializer, valueSerializer,
+				defaultValue, 0);
 	}
 
 	@Override
@@ -60,5 +70,9 @@ public class TFileStateBackend extends FsStateBackend {
 
 	public FileSystem getHadoopFileSystem() {
 		return fs;
+	}
+
+	public KvStateConfig getKvStateConf() {
+		return kvStateConf;
 	}
 }
