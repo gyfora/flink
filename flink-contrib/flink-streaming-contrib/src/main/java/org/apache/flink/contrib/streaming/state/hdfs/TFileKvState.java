@@ -1,6 +1,25 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -15,10 +34,11 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.contrib.streaming.state.DbStateBackend;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
+import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.util.InstantiationUtil;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
 import com.google.common.base.Function;
@@ -26,7 +46,7 @@ import com.google.common.base.Optional;
 import com.google.common.collect.Lists;
 import com.google.common.primitives.UnsignedBytes;
 
-public class TFileKvState<K, V> implements KvState<K, V, DbStateBackend> {
+public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 
 	private static final byte[] TOMBSTONE = new byte[0];
 
@@ -38,41 +58,50 @@ public class TFileKvState<K, V> implements KvState<K, V, DbStateBackend> {
 
 	private final StateCache cache;
 
-	private final String cpParentDir;
+	private final Path cpParentDir;
 	private final KeyScanner scanner;
+
+	private final FileSystem fs;
 
 	private long nextTs = 0;
 
 	public TFileKvState(
-			String cpParentDir,
-			List<String> cpFiles,
+			FileSystem fs,
+			Path cpParentDir,
+			List<Path> cpFiles,
 			TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer,
-			V defaultValue) {
+			V defaultValue,
+			long nextTs) {
 
 		this.keySerializer = keySerializer;
 		this.valueSerializer = valueSerializer;
 
 		this.defaultValue = defaultValue;
 
-		this.cpParentDir = cpParentDir;
-		this.cache = new StateCache(100, 50);
+		this.nextTs = nextTs;
 
-		List<String> sortedCpFiles = new ArrayList<>(cpFiles);
-		Collections.sort(cpFiles, new Comparator<String>() {
+		this.cpParentDir = cpParentDir;
+		this.cache = new StateCache(1000000, 1000000);
+
+		List<Path> sortedCpFiles = new ArrayList<>(cpFiles);
+		Collections.sort(cpFiles, new Comparator<Path>() {
 			@Override
-			public int compare(String o1, String o2) {
-				return Long.compare(Long.parseLong(o1), Long.parseLong(o2));
+			public int compare(Path o1, Path o2) {
+				return -1 * Long.compare(Long.parseLong(o1.getName()), Long.parseLong(o1.getName()));
 			}
 		});
 
-		this.scanner = new KeyScanner(
-				Lists.transform(sortedCpFiles, new Function<String, Path>() {
-					@Override
-					public Path apply(String file) {
-						return new Path(TFileKvState.this.cpParentDir, file);
-					}
-				}));
+		this.scanner = new KeyScanner(fs, sortedCpFiles);
+		this.fs = fs;
+	}
+
+	public KeyScanner getKeyScanner() {
+		return scanner;
+	}
+
+	public StateCache getCache() {
+		return cache;
 	}
 
 	@Override
@@ -107,21 +136,22 @@ public class TFileKvState<K, V> implements KvState<K, V, DbStateBackend> {
 	}
 
 	@Override
-	public KvStateSnapshot<K, V, DbStateBackend> snapshot(long checkpointId, long timestamp)
+	public KvStateSnapshot<K, V, FsStateBackend> snapshot(long checkpointId, long timestamp)
 			throws Exception {
 
 		SortedMap<byte[], byte[]> modifiedKVs = serializeAndSort(cache.modified.entrySet());
 		writeToDisk(modifiedKVs, timestamp);
+		cache.modified.clear();
 
 		nextTs = timestamp + 1;
 
-		return null;
+		return new TFileKvStateSnapshot<>(timestamp, cpParentDir, scanner.getPaths());
 	}
 
 	private void writeToDisk(SortedMap<byte[], byte[]> modifiedKVs, long timestamp) {
 		Path cpTFile = new Path(cpParentDir, String.valueOf(timestamp));
 
-		try (CheckpointWriter writer = new CheckpointWriter(cpTFile)) {
+		try (CheckpointWriter writer = new CheckpointWriter(cpTFile, fs)) {
 			writer.writeSorted(modifiedKVs);
 		} catch (Exception e) {
 			throw new RuntimeException("Could not write checkpoint to disk.", e);
@@ -137,7 +167,7 @@ public class TFileKvState<K, V> implements KvState<K, V, DbStateBackend> {
 			Optional<V> val = entry.getValue();
 			sortedKVs.put(
 					InstantiationUtil.serializeToByteArray(keySerializer, entry.getKey()),
-					val.isPresent() ? InstantiationUtil.serializeObject(val.get()) : TOMBSTONE);
+					val.isPresent() ? InstantiationUtil.serializeToByteArray(valueSerializer, val.get()) : TOMBSTONE);
 		}
 
 		return sortedKVs;
@@ -261,9 +291,61 @@ public class TFileKvState<K, V> implements KvState<K, V, DbStateBackend> {
 
 		@Override
 		public void clear() {
-			throw new UnsupportedOperationException();
+			super.clear();
+			modified.clear();
+		}
+
+		@Override
+		public String toString() {
+			return "Cache: " + super.toString() + "\nModified: " + modified;
+		}
+	}
+
+	private static class TFileKvStateSnapshot<K, V> implements KvStateSnapshot<K, V, FsStateBackend> {
+
+		private static final long serialVersionUID = 1L;
+
+		private long timestamp;
+		private URI cpParentDir;
+		private List<URI> paths;
+
+		public TFileKvStateSnapshot(long timestamp, Path cpParentDir, List<Path> paths) {
+			this.timestamp = timestamp;
+			this.cpParentDir = cpParentDir.toUri();
+			this.paths = new ArrayList<>(Lists.transform(paths, new Function<Path, URI>() {
+
+				@Override
+				public URI apply(Path path) {
+					return path.toUri();
+				}
+			}));
+		}
+
+		@Override
+		public KvState<K, V, FsStateBackend> restoreState(FsStateBackend stateBackend, TypeSerializer<K> keySerializer,
+				TypeSerializer<V> valueSerializer, V defaultValue, ClassLoader classLoader, long recoveryTimestamp)
+						throws Exception {
+			return new TFileKvState<>(((TFileStateBackend) stateBackend).getHadoopFileSystem(), new Path(cpParentDir),
+					Lists.transform(paths, new Function<URI, Path>() {
+
+						@Override
+						public Path apply(URI uri) {
+							return new Path(uri);
+						}
+					}),
+					keySerializer, valueSerializer, defaultValue,
+					timestamp + 1);
+		}
+
+		@Override
+		public void discardState() throws Exception {
+			// Remove files?
+		}
+
+		@Override
+		public long getStateSize() throws Exception {
+			return 0;
 		}
 
 	}
-
 }
