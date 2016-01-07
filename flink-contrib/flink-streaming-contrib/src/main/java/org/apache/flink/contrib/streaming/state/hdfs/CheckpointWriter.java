@@ -25,12 +25,15 @@ import java.util.Map.Entry;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.contrib.streaming.state.KeyFunnel;
+import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.file.tfile.TFile.Writer;
 
+import com.google.common.base.Optional;
 import com.google.common.hash.BloomFilter;
 import com.google.common.primitives.UnsignedBytes;
 
@@ -46,24 +49,32 @@ public class CheckpointWriter implements AutoCloseable {
 		writer = new Writer(fout, minBlockSize, "none", "memcmp", fs.getConf());
 	}
 
-	public void writeSorted(SortedMap<byte[], byte[]> kvPairs) throws IOException {
+	public <V> void writeSorted(SortedMap<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
+			throws IOException {
 
-		BloomFilter<byte[]> bf = BloomFilter.create(new KeyFunnel(), 1000000, 0.0001);
+		BloomFilter<byte[]> bloomFilter = BloomFilter.create(new KeyFunnel(), 1000000, 0.0001);
 
-		for (Entry<byte[], byte[]> kv : kvPairs.entrySet()) {
-			bf.put(kv.getKey());
-			writer.append(kv.getKey(), kv.getValue());
+		for (Entry<byte[], Optional<V>> kv : kvPairs.entrySet()) {
+
+			byte[] key = kv.getKey();
+			Optional<V> valueOption = kv.getValue();
+
+			bloomFilter.put(key);
+			writer.append(key, valueOption.isPresent()
+					? InstantiationUtil.serializeToByteArray(valueSerializer, valueOption.get())
+					: new byte[0]);
 		}
 
 		DataOutputStream mo = writer.prepareMetaBlock("bloomfilter");
-		bf.writeTo(mo);
+		bloomFilter.writeTo(mo);
 		mo.close();
 	}
 
-	public void writeUnsorted(Map<byte[], byte[]> kvPairs) throws IOException {
-		TreeMap<byte[], byte[]> sorted = new TreeMap<>(UnsignedBytes.lexicographicalComparator());
+	public <V> void writeUnsorted(Map<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
+			throws IOException {
+		TreeMap<byte[], Optional<V>> sorted = new TreeMap<>(UnsignedBytes.lexicographicalComparator());
 		sorted.putAll(kvPairs);
-		writeSorted(sorted);
+		writeSorted(sorted, valueSerializer);
 	}
 
 	@Override

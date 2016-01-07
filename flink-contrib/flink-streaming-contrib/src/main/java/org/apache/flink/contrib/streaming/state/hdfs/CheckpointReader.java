@@ -33,20 +33,19 @@ public class CheckpointReader implements AutoCloseable {
 
 	private Reader reader;
 	private Scanner scanner;
-	private BloomFilter<byte[]> bf;
+	private BloomFilter<byte[]> bloomfilter;
 
 	public CheckpointReader(Path path, FileSystem fs) throws IOException {
 		reader = new Reader(fs.open(path), fs.getFileStatus(path).getLen(), fs.getConf());
 		scanner = reader.createScanner();
 
 		DataInputStream bi = reader.getMetaBlock("bloomfilter");
-		bf = BloomFilter.readFrom(bi, new KeyFunnel());
+		bloomfilter = BloomFilter.readFrom(bi, new KeyFunnel());
 		bi.close();
 	}
 
 	public byte[] lookup(byte[] key) throws IOException {
-		boolean mightContain = bf.mightContain(key);
-		if (mightContain && scanner.seekTo(key)) {
+		if (bloomfilter.mightContain(key) && scanner.seekTo(key)) {
 			int valueLen = scanner.entry().getValueLength();
 			byte[] read = new byte[valueLen];
 			scanner.entry().getValue(read);

@@ -143,7 +143,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 	public KvStateSnapshot<K, V, FsStateBackend> snapshot(long checkpointId, long timestamp)
 			throws Exception {
 
-		SortedMap<byte[], byte[]> modifiedKVs = serializeAndSort(cache.modified.entrySet());
+		SortedMap<byte[], Optional<V>> modifiedKVs = serializeAndSort(cache.modified.entrySet());
 		writeToDisk(modifiedKVs, timestamp);
 		cache.modified.clear();
 
@@ -152,11 +152,11 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		return new TFileKvStateSnapshot<>(timestamp, cpParentDir, scanner.getPaths());
 	}
 
-	private void writeToDisk(SortedMap<byte[], byte[]> modifiedKVs, long timestamp) {
+	private void writeToDisk(SortedMap<byte[], Optional<V>> modifiedKVs, long timestamp) {
 		Path cpTFile = new Path(cpParentDir, String.valueOf(timestamp));
 
 		try (CheckpointWriter writer = new CheckpointWriter(cpTFile, fs)) {
-			writer.writeSorted(modifiedKVs);
+			writer.writeSorted(modifiedKVs, valueSerializer);
 		} catch (Exception e) {
 			throw new RuntimeException("Could not write checkpoint to disk.", e);
 		}
@@ -164,14 +164,15 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		scanner.addNewLookupFile(cpTFile);
 	}
 
-	private SortedMap<byte[], byte[]> serializeAndSort(Collection<Entry<K, Optional<V>>> modified) throws IOException {
-		SortedMap<byte[], byte[]> sortedKVs = new TreeMap<>(UnsignedBytes.lexicographicalComparator());
+	private SortedMap<byte[], Optional<V>> serializeAndSort(Collection<Entry<K, Optional<V>>> modified)
+			throws IOException {
+
+		SortedMap<byte[], Optional<V>> sortedKVs = new TreeMap<>(UnsignedBytes.lexicographicalComparator());
 
 		for (Entry<K, Optional<V>> entry : modified) {
-			Optional<V> val = entry.getValue();
 			sortedKVs.put(
 					InstantiationUtil.serializeToByteArray(keySerializer, entry.getKey()),
-					val.isPresent() ? InstantiationUtil.serializeToByteArray(valueSerializer, val.get()) : new byte[0]);
+					entry.getValue());
 		}
 
 		return sortedKVs;
@@ -225,8 +226,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			// First we check whether the value is cached
 			Optional<V> value = super.get(key);
 			if (value == null) {
-				// Read from disk
-				value = Optional.fromNullable(getFromDiskOrNull((K) key));
+				value = getFromDisk((K) key);
 				put((K) key, value);
 			}
 			return value;
@@ -239,15 +239,11 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			return false;
 		}
 
-		private V getFromDiskOrNull(final K key) {
+		private Optional<V> getFromDisk(final K key) {
 			try {
 				final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
 
-				byte[] serializedVal = scanner.lookup(serializedKey);
-
-				return serializedVal != null && serializedVal.length > 0
-						? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
-
+				return scanner.lookup(serializedKey, valueSerializer);
 			} catch (IOException e) {
 				// We need to re-throw this exception to conform to the map
 				// interface, we will catch this when we call the the put/get
@@ -329,9 +325,9 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		public KvState<K, V, FsStateBackend> restoreState(FsStateBackend stateBackend, TypeSerializer<K> keySerializer,
 				TypeSerializer<V> valueSerializer, V defaultValue, ClassLoader classLoader, long recoveryTimestamp)
 						throws Exception {
-			
+
 			TFileStateBackend backend = (TFileStateBackend) stateBackend;
-			
+
 			return new TFileKvState<>(backend.getKvStateConf(), backend.getHadoopFileSystem(), new Path(cpParentDir),
 					Lists.transform(paths, new Function<URI, Path>() {
 

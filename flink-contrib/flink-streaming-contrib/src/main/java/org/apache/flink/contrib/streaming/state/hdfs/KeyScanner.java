@@ -24,8 +24,12 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+
+import com.google.common.base.Optional;
 
 public class KeyScanner implements AutoCloseable {
 	private final LinkedList<Path> paths;
@@ -45,19 +49,21 @@ public class KeyScanner implements AutoCloseable {
 		paths.addFirst(path);
 	}
 
-	public byte[] lookup(byte[] key) throws IOException {
+	public <V> Optional<V> lookup(byte[] key, TypeSerializer<V> valueSerializer) throws IOException {
 		for (Path checkpointPath : paths) {
 			CheckpointReader reader = openReaders.get(checkpointPath);
 			if (reader == null) {
 				reader = new CheckpointReader(checkpointPath, fs);
 				openReaders.put(checkpointPath, reader);
 			}
-			byte[] value = reader.lookup(key);
-			if (value != null) {
-				return value;
+			byte[] val = reader.lookup(key);
+			if (val != null) {
+				return val.length > 0
+						? Optional.of(InstantiationUtil.deserializeFromByteArray(valueSerializer, val))
+						: Optional.<V> absent();
 			}
 		}
-		return null;
+		return Optional.absent();
 	}
 
 	@Override
