@@ -18,29 +18,16 @@
 
 package org.apache.flink.contrib.streaming.state.hdfs;
 
+import java.io.IOException;
+import java.io.Serializable;
+
 import org.apache.flink.contrib.streaming.state.KvStateConfig;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 
-public class HdfsKvStateConfig extends KvStateConfig {
+public interface CheckpointerFactory extends Serializable {
 
-	private static final long serialVersionUID = 1L;
-	private CheckpointerFactory checkpointerFactory;
+	CheckpointReader createReader(FileSystem fs, Path path, KvStateConfig conf) throws IOException;
 
-	public HdfsKvStateConfig(int kvStateCacheSize, double maxCacheEvictFraction) {
-		this(kvStateCacheSize, maxCacheEvictFraction, new TFileCheckpointerFactory());
-	}
-
-	public HdfsKvStateConfig(int kvStateCacheSize, double maxCacheEvictFraction,
-			CheckpointerFactory checkpointerFactory) {
-		super(kvStateCacheSize, maxCacheEvictFraction);
-		this.checkpointerFactory = checkpointerFactory;
-	}
-
-	public CheckpointerFactory getCheckpointerFactory() {
-		return checkpointerFactory;
-	}
-
-	public void setCheckpointerFactory(CheckpointerFactory checkpointerFactory) {
-		this.checkpointerFactory = checkpointerFactory;
-	}
-
+	CheckpointWriter createWriter(FileSystem fs, Path path, KvStateConfig conf) throws IOException;
 }

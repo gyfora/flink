@@ -28,6 +28,7 @@ import java.util.Random;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.contrib.streaming.state.hdfs.CheckpointWriter;
+import org.apache.flink.contrib.streaming.state.hdfs.CheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvState;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner;

@@ -20,7 +20,6 @@ package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
 
-import org.apache.flink.contrib.streaming.state.CheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
