@@ -19,23 +19,24 @@
 package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
-import java.io.Serializable;
-import java.util.Collection;
-import java.util.Map.Entry;
-import java.util.SortedMap;
 
-import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.contrib.streaming.state.CheckpointerFactory;
+import org.apache.flink.contrib.streaming.state.KvStateConfig;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 
-import com.google.common.base.Optional;
+public class MapFileCheckpointerFactory implements CheckpointerFactory {
 
-public interface CheckpointWriter extends AutoCloseable, Serializable {
+	private static final long serialVersionUID = 1L;
 
-	<V> Tuple2<Double, Double> writeSorted(SortedMap<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
-			throws IOException;
+	@Override
+	public CheckpointReader createReader(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
+		return new MapFileCheckpointReader(path, fs);
+	}
 
-	public <K, V> Tuple2<Double, Double> writeUnsorted(Collection<Entry<K, Optional<V>>> kvPairs,
-			TypeSerializer<K> keySerializer,
-			TypeSerializer<V> valueSerializer) throws IOException;
+	@Override
+	public CheckpointWriter createWriter(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
+		return new MapFileCheckpointWriter(path, fs);
+	}
 
 }

@@ -19,23 +19,33 @@
 package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
-import java.io.Serializable;
-import java.util.Collection;
-import java.util.Map.Entry;
-import java.util.SortedMap;
 
-import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.BloomMapFile.Reader;
+import org.apache.hadoop.io.BytesWritable;
 
-import com.google.common.base.Optional;
+public class MapFileCheckpointReader implements CheckpointReader {
 
-public interface CheckpointWriter extends AutoCloseable, Serializable {
+	private static final long serialVersionUID = 1L;
 
-	<V> Tuple2<Double, Double> writeSorted(SortedMap<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
-			throws IOException;
+	private Reader reader;
 
-	public <K, V> Tuple2<Double, Double> writeUnsorted(Collection<Entry<K, Optional<V>>> kvPairs,
-			TypeSerializer<K> keySerializer,
-			TypeSerializer<V> valueSerializer) throws IOException;
+	public MapFileCheckpointReader(Path path, FileSystem fs) throws IOException {
+		reader = new Reader(path, new Configuration());
+
+	}
+
+	public byte[] lookup(byte[] key) throws IOException {
+		BytesWritable val = new BytesWritable();
+		reader.get(new BytesWritable(key), val);
+		return val.getBytes();
+	}
+
+	@Override
+	public void close() throws Exception {
+		reader.close();
+	}
 
 }

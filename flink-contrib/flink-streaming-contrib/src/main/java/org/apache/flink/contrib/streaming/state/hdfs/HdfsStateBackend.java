@@ -22,7 +22,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -30,21 +29,21 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
-public class TFileStateBackend extends FsStateBackend {
+public class HdfsStateBackend extends FsStateBackend {
 
 	private static final long serialVersionUID = 1L;
 
 	private transient Path checkpointDir;
 	private transient FileSystem fs;
 	private transient Environment env;
-	private KvStateConfig kvStateConf;
+	private HdfsKvStateConfig kvStateConf;
 
-	public TFileStateBackend(String checkpointDataUri, KvStateConfig kvStateConf) throws IOException {
+	public HdfsStateBackend(String checkpointDataUri, HdfsKvStateConfig kvStateConf) throws IOException {
 		super(checkpointDataUri);
 		this.kvStateConf = kvStateConf;
 	}
 
-	public TFileStateBackend(org.apache.flink.core.fs.Path checkpointDataUri, KvStateConfig kvStateConf)
+	public HdfsStateBackend(org.apache.flink.core.fs.Path checkpointDataUri, HdfsKvStateConfig kvStateConf)
 			throws IOException {
 		super(checkpointDataUri);
 		this.kvStateConf = kvStateConf;
@@ -55,7 +54,7 @@ public class TFileStateBackend extends FsStateBackend {
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception {
 		Path p = new Path(new Path(checkpointDir, String.valueOf(env.getTaskInfo().getIndexOfThisSubtask())), stateId);
 		fs.mkdirs(p);
-		return new TFileKvState<K, V>(kvStateConf, fs, p, new ArrayList<Path>(), keySerializer, valueSerializer,
+		return new HdfsKvState<K, V>(kvStateConf, fs, p, new ArrayList<Path>(), keySerializer, valueSerializer,
 				defaultValue, 0);
 	}
 
@@ -76,7 +75,7 @@ public class TFileStateBackend extends FsStateBackend {
 		return fs;
 	}
 
-	public KvStateConfig getKvStateConf() {
+	public HdfsKvStateConfig getKvStateConf() {
 		return kvStateConf;
 	}
 }

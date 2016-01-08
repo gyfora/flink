@@ -43,7 +43,7 @@ public class TFileUtils {
 		Scanner scannerSecond = readerSecond.createScanner();
 
 		FSDataOutputStream fout = fs.create(newFile);
-		Writer writer = new Writer(fout, CheckpointWriter.minBlockSize, "none", "memcmp", conf);
+		Writer writer = new Writer(fout, TFileCheckpointWriter.minBlockSize, "none", "memcmp", conf);
 
 		Comparator<Scanner.Entry> entryComparator = readerFirst.getEntryComparator();
 

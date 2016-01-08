@@ -35,10 +35,12 @@ public class KeyScanner implements AutoCloseable {
 	private final LinkedList<Path> paths;
 	private final Map<Path, CheckpointReader> openReaders = new HashMap<>();
 	private final FileSystem fs;
+	private final HdfsKvStateConfig conf;
 
-	public KeyScanner(FileSystem fs, List<Path> paths) {
+	public KeyScanner(FileSystem fs, List<Path> paths, HdfsKvStateConfig conf) {
 		this.paths = new LinkedList<>(paths);
 		this.fs = fs;
+		this.conf = conf;
 	}
 
 	public List<Path> getPaths() {
@@ -53,7 +55,7 @@ public class KeyScanner implements AutoCloseable {
 		for (Path checkpointPath : paths) {
 			CheckpointReader reader = openReaders.get(checkpointPath);
 			if (reader == null) {
-				reader = new CheckpointReader(checkpointPath, fs);
+				reader = conf.getCheckpointerFactory().createReader(fs, checkpointPath, conf);
 				openReaders.put(checkpointPath, reader);
 			}
 			byte[] val = reader.lookup(key);

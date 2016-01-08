@@ -19,23 +19,35 @@
 package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.Collection;
 import java.util.Map.Entry;
 import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.util.InstantiationUtil;
 
 import com.google.common.base.Optional;
+import com.google.common.primitives.UnsignedBytes;
 
-public interface CheckpointWriter extends AutoCloseable, Serializable {
+public abstract class AbstractCheckpointWriter implements CheckpointWriter {
 
-	<V> Tuple2<Double, Double> writeSorted(SortedMap<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
-			throws IOException;
+	private static final long serialVersionUID = 1L;
 
+	@Override
 	public <K, V> Tuple2<Double, Double> writeUnsorted(Collection<Entry<K, Optional<V>>> kvPairs,
 			TypeSerializer<K> keySerializer,
-			TypeSerializer<V> valueSerializer) throws IOException;
+			TypeSerializer<V> valueSerializer) throws IOException {
 
+		SortedMap<byte[], Optional<V>> sortedKVs = new TreeMap<>(UnsignedBytes.lexicographicalComparator());
+
+		for (Entry<K, Optional<V>> entry : kvPairs) {
+			sortedKVs.put(
+					InstantiationUtil.serializeToByteArray(keySerializer, entry.getKey()),
+					entry.getValue());
+		}
+
+		return writeSorted(sortedKVs, valueSerializer);
+	}
 }

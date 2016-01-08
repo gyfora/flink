@@ -30,7 +30,9 @@ import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.contrib.streaming.state.hdfs.TFileStateBackend;
+import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
+import org.apache.flink.contrib.streaming.state.hdfs.HdfsStateBackend;
+import org.apache.flink.contrib.streaming.state.hdfs.MapFileCheckpointerFactory;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -41,7 +43,7 @@ import org.apache.flink.test.checkpointing.PartitionedStateCheckpointingITCase.N
 import org.apache.flink.test.checkpointing.StreamFaultToleranceTestBase;
 
 @SuppressWarnings("serial")
-public class TfileStateCheckpointingTest extends StreamFaultToleranceTestBase {
+public class HdfsStateCheckpointingTest extends StreamFaultToleranceTestBase {
 	final long NUM_STRINGS = 1_000_000L;
 	final static int NUM_KEYS = 100_000;
 
@@ -50,7 +52,8 @@ public class TfileStateCheckpointingTest extends StreamFaultToleranceTestBase {
 		env.enableCheckpointing(500);
 
 		try {
-			env.setStateBackend(new TFileStateBackend("file:///Users/gyulafora/Test", new KvStateConfig(10000, 1)));
+			env.setStateBackend(new HdfsStateBackend("file:///Users/gyulafora/Test",
+					new HdfsKvStateConfig(10000, 1, new MapFileCheckpointerFactory())));
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -176,7 +179,7 @@ public class TfileStateCheckpointingTest extends StreamFaultToleranceTestBase {
 			count++;
 			if (!hasFailed && count >= failurePos) {
 				hasFailed = true;
-				// throw new Exception("Test Failure");
+				throw new Exception("Test Failure");
 			}
 
 			long currentSum = sum.value() + value;

@@ -30,12 +30,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.SortedMap;
-import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.contrib.streaming.state.KvStateConfig;
+import org.apache.flink.contrib.streaming.state.CheckpointerFactory;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -48,13 +46,13 @@ import org.slf4j.LoggerFactory;
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.collect.Lists;
-import com.google.common.primitives.UnsignedBytes;
 
-public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
+public class HdfsKvState<K, V> implements KvState<K, V, FsStateBackend> {
 
-	private static final Logger LOG = LoggerFactory.getLogger(TFileKvState.class);
+	private static final Logger LOG = LoggerFactory.getLogger(HdfsKvState.class);
 
-	private final KvStateConfig conf;
+	private final HdfsKvStateConfig conf;
+	private final CheckpointerFactory cpFactory;
 
 	private final TypeSerializer<K> keySerializer;
 	private final TypeSerializer<V> valueSerializer;
@@ -71,8 +69,8 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 
 	private long nextTs = 0;
 
-	public TFileKvState(
-			KvStateConfig kvStateConf,
+	public HdfsKvState(
+			HdfsKvStateConfig kvStateConf,
 			FileSystem fs,
 			Path cpParentDir,
 			List<Path> cpFiles,
@@ -82,6 +80,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			long nextTs) {
 
 		this.conf = kvStateConf;
+		this.cpFactory = conf.getCheckpointerFactory();
 
 		this.keySerializer = keySerializer;
 		this.valueSerializer = valueSerializer;
@@ -103,7 +102,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			}
 		});
 
-		this.scanner = new KeyScanner(fs, sortedCpFiles);
+		this.scanner = new KeyScanner(fs, sortedCpFiles, conf);
 		this.fs = fs;
 	}
 
@@ -150,63 +149,41 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 	public KvStateSnapshot<K, V, FsStateBackend> snapshot(long checkpointId, long timestamp)
 			throws Exception {
 
-		LOG.debug("Starting TFile snapshot {} @ {}", checkpointId, timestamp);
+		LOG.debug("Starting hdfs snapshot {} @ {}", checkpointId, timestamp);
 
 		if (!cache.modified.isEmpty()) {
-			// We serialize the keys in the k-v pairs and sort the byte arrays
-			SortedMap<byte[], Optional<V>> modifiedKVs = serializeAndSort(cache.modified.entrySet());
-			// We store write the modified state to disk and clear "modified"
-			// map
-			writeToDisk(modifiedKVs, timestamp);
+			writeToDisk(cache.modified.entrySet(), timestamp);
 			cache.modified.clear();
 		}
 
 		nextTs = timestamp + 1;
 
-		LOG.debug("Completed TFile snapshot {} @ {}", checkpointId, timestamp);
+		LOG.debug("Completed hdfs snapshot {} @ {}", checkpointId, timestamp);
 
-		return new TFileKvStateSnapshot<>(timestamp, cpParentDir, scanner.getPaths());
+		return new HdfsKvStateSnapshot<>(timestamp, cpParentDir, scanner.getPaths());
 	}
 
 	/**
-	 * Save modified K-V pairs to a new TFile on disk
+	 * Save modified K-V pairs to a new file on disk
 	 */
-	private void writeToDisk(SortedMap<byte[], Optional<V>> modifiedKVs, long timestamp) {
+	private void writeToDisk(Collection<Entry<K, Optional<V>>> modifiedKVs, long timestamp) {
 		if (!modifiedKVs.isEmpty()) {
 			// We use the timestamp as filename (this is assumed to be
 			// increasing between snapshots)
-			Path cpTFile = new Path(cpParentDir, String.valueOf(timestamp));
+			Path cpFile = new Path(cpParentDir, String.valueOf(timestamp));
 
 			// Write the sorted k-v pairs to the new file
-			try (CheckpointWriter writer = new CheckpointWriter(cpTFile, fs)) {
-				Tuple2<Double, Double> kbytesWritten = writer.writeSorted(modifiedKVs, valueSerializer);
+			try (CheckpointWriter writer = cpFactory.createWriter(fs, cpFile, conf)) {
+				Tuple2<Double, Double> kbytesWritten = writer.writeUnsorted(modifiedKVs, keySerializer,
+						valueSerializer);
 				LOG.debug("Successfully written checkpoint to disk - (keyKBytes, valueKBytes) = {}", kbytesWritten);
 			} catch (Exception e) {
 				throw new RuntimeException("Could not write checkpoint to disk.", e);
 			}
 
 			// Add the new checkpoint file to the scanner for future lookups
-			scanner.addNewLookupFile(cpTFile);
+			scanner.addNewLookupFile(cpFile);
 		}
-	}
-
-	/**
-	 * Transform the map of K-Optional<V> pairs to a sorted map of byte[]-V
-	 * pairs, by serializing the key using the {@link TypeSerializer} and
-	 * sorting it with a lexicographical {@link Comparator}
-	 */
-	private SortedMap<byte[], Optional<V>> serializeAndSort(Collection<Entry<K, Optional<V>>> modified)
-			throws IOException {
-
-		SortedMap<byte[], Optional<V>> sortedKVs = new TreeMap<>(UnsignedBytes.lexicographicalComparator());
-
-		for (Entry<K, Optional<V>> entry : modified) {
-			sortedKVs.put(
-					InstantiationUtil.serializeToByteArray(keySerializer, entry.getKey()),
-					entry.getValue());
-		}
-
-		return sortedKVs;
 	}
 
 	/**
@@ -285,33 +262,27 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 
 		private void evictIfFull() {
 			if (size() > cacheSize) {
-				try {
-					int numEvicted = 0;
-					Iterator<Entry<K, Optional<V>>> entryIterator = entrySet().iterator();
-					List<Entry<K, Optional<V>>> toEvict = new ArrayList<>();
 
-					while (numEvicted++ < evictionSize && entryIterator.hasNext()) {
+				int numEvicted = 0;
+				Iterator<Entry<K, Optional<V>>> entryIterator = entrySet().iterator();
+				List<Entry<K, Optional<V>>> toEvict = new ArrayList<>();
 
-						Entry<K, Optional<V>> next = entryIterator.next();
+				while (numEvicted++ < evictionSize && entryIterator.hasNext()) {
 
-						// We only need to write to the database if modified
-						if (modified.remove(next.getKey()) != null) {
-							toEvict.add(next);
-						}
+					Entry<K, Optional<V>> next = entryIterator.next();
 
-						entryIterator.remove();
+					// We only need to write to the database if modified
+					if (modified.remove(next.getKey()) != null) {
+						toEvict.add(next);
 					}
 
-					writeToDisk(serializeAndSort(toEvict), nextTs);
-
-					nextTs++;
-
-				} catch (IOException e) {
-					// We need to re-throw this exception to conform to the map
-					// interface, we will catch this when we call the the
-					// put/get
-					throw new RuntimeException("Could not evict state", e);
+					entryIterator.remove();
 				}
+
+				writeToDisk(toEvict, nextTs);
+
+				nextTs++;
+
 			}
 		}
 
@@ -332,7 +303,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		}
 	}
 
-	private static class TFileKvStateSnapshot<K, V> implements KvStateSnapshot<K, V, FsStateBackend> {
+	private static class HdfsKvStateSnapshot<K, V> implements KvStateSnapshot<K, V, FsStateBackend> {
 
 		private static final long serialVersionUID = 1L;
 
@@ -340,7 +311,7 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		private URI cpParentDir;
 		private List<URI> paths;
 
-		public TFileKvStateSnapshot(long timestamp, Path cpParentDir, List<Path> paths) {
+		public HdfsKvStateSnapshot(long timestamp, Path cpParentDir, List<Path> paths) {
 			this.timestamp = timestamp;
 			this.cpParentDir = cpParentDir.toUri();
 			this.paths = new ArrayList<>(Lists.transform(paths, new Function<Path, URI>() {
@@ -357,9 +328,9 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 				TypeSerializer<V> valueSerializer, V defaultValue, ClassLoader classLoader, long recoveryTimestamp)
 						throws Exception {
 
-			TFileStateBackend backend = (TFileStateBackend) stateBackend;
+			HdfsStateBackend backend = (HdfsStateBackend) stateBackend;
 
-			return new TFileKvState<>(backend.getKvStateConf(), backend.getHadoopFileSystem(), new Path(cpParentDir),
+			return new HdfsKvState<>(backend.getKvStateConf(), backend.getHadoopFileSystem(), new Path(cpParentDir),
 					Lists.transform(paths, new Function<URI, Path>() {
 
 						@Override
