@@ -64,7 +64,11 @@ public class TFileStateBackend extends FsStateBackend {
 		super.initializeForJob(env);
 
 		checkpointDir = new Path(new Path(getCheckpointDirectory().toUri()), "kvstate");
-		fs = checkpointDir.getFileSystem(new Configuration());
+		try {
+			fs = checkpointDir.getFileSystem(new Configuration());
+		} catch (Exception e) {
+			System.out.println(e.getMessage());
+		}
 		this.env = env;
 	}
 

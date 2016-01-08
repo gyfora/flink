@@ -34,6 +34,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
@@ -41,6 +42,8 @@ import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
@@ -48,6 +51,8 @@ import com.google.common.collect.Lists;
 import com.google.common.primitives.UnsignedBytes;
 
 public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
+
+	private static final Logger LOG = LoggerFactory.getLogger(TFileKvState.class);
 
 	private final KvStateConfig conf;
 
@@ -86,8 +91,10 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		this.nextTs = nextTs;
 
 		this.cpParentDir = cpParentDir;
-		this.cache = new StateCache(kvStateConf.getKvCacheSize(), conf.getNumElementsToEvict());
+		this.cache = new StateCache(conf.getKvCacheSize(), conf.getNumElementsToEvict());
 
+		// We make sure our lookup file a sorted in descending order by
+		// name (timestamp)
 		List<Path> sortedCpFiles = new ArrayList<>(cpFiles);
 		Collections.sort(cpFiles, new Comparator<Path>() {
 			@Override
@@ -143,27 +150,51 @@ public class TFileKvState<K, V> implements KvState<K, V, FsStateBackend> {
 	public KvStateSnapshot<K, V, FsStateBackend> snapshot(long checkpointId, long timestamp)
 			throws Exception {
 
-		SortedMap<byte[], Optional<V>> modifiedKVs = serializeAndSort(cache.modified.entrySet());
-		writeToDisk(modifiedKVs, timestamp);
-		cache.modified.clear();
+		LOG.debug("Starting TFile snapshot {} @ {}", checkpointId, timestamp);
+
+		if (!cache.modified.isEmpty()) {
+			// We serialize the keys in the k-v pairs and sort the byte arrays
+			SortedMap<byte[], Optional<V>> modifiedKVs = serializeAndSort(cache.modified.entrySet());
+			// We store write the modified state to disk and clear "modified"
+			// map
+			writeToDisk(modifiedKVs, timestamp);
+			cache.modified.clear();
+		}
 
 		nextTs = timestamp + 1;
+
+		LOG.debug("Completed TFile snapshot {} @ {}", checkpointId, timestamp);
 
 		return new TFileKvStateSnapshot<>(timestamp, cpParentDir, scanner.getPaths());
 	}
 
+	/**
+	 * Save modified K-V pairs to a new TFile on disk
+	 */
 	private void writeToDisk(SortedMap<byte[], Optional<V>> modifiedKVs, long timestamp) {
-		Path cpTFile = new Path(cpParentDir, String.valueOf(timestamp));
+		if (!modifiedKVs.isEmpty()) {
+			// We use the timestamp as filename (this is assumed to be
+			// increasing between snapshots)
+			Path cpTFile = new Path(cpParentDir, String.valueOf(timestamp));
 
-		try (CheckpointWriter writer = new CheckpointWriter(cpTFile, fs)) {
-			writer.writeSorted(modifiedKVs, valueSerializer);
-		} catch (Exception e) {
-			throw new RuntimeException("Could not write checkpoint to disk.", e);
+			// Write the sorted k-v pairs to the new file
+			try (CheckpointWriter writer = new CheckpointWriter(cpTFile, fs)) {
+				Tuple2<Double, Double> kbytesWritten = writer.writeSorted(modifiedKVs, valueSerializer);
+				LOG.debug("Successfully written checkpoint to disk - (keyKBytes, valueKBytes) = {}", kbytesWritten);
+			} catch (Exception e) {
+				throw new RuntimeException("Could not write checkpoint to disk.", e);
+			}
+
+			// Add the new checkpoint file to the scanner for future lookups
+			scanner.addNewLookupFile(cpTFile);
 		}
-
-		scanner.addNewLookupFile(cpTFile);
 	}
 
+	/**
+	 * Transform the map of K-Optional<V> pairs to a sorted map of byte[]-V
+	 * pairs, by serializing the key using the {@link TypeSerializer} and
+	 * sorting it with a lexicographical {@link Comparator}
+	 */
 	private SortedMap<byte[], Optional<V>> serializeAndSort(Collection<Entry<K, Optional<V>>> modified)
 			throws IOException {
 

@@ -26,18 +26,18 @@ public class KvStateConfig implements Serializable {
 
 	// Dedault properties
 	protected int kvStateCacheSize;
-	protected float maxKvEvictFraction;
+	protected double maxKvEvictFraction;
 
 	protected int bfExpectedInserts = -1;
 	protected double bfFPP = -1;
 
-	public KvStateConfig(int kvStateCacheSize, float maxCacheEvictFraction) {
+	public KvStateConfig(int kvStateCacheSize, double maxCacheEvictFraction) {
 		this.kvStateCacheSize = kvStateCacheSize;
 		this.maxKvEvictFraction = maxCacheEvictFraction;
 	}
 
 	public KvStateConfig() {
-		this(10000, 0.1f);
+		this(10000, 0.1);
 	}
 
 	/**
@@ -64,7 +64,7 @@ public class KvStateConfig implements Serializable {
 	 * Sets the maximum fraction of key-value states evicted from the cache if
 	 * the cache is full.
 	 */
-	public void setMaxKvCacheEvictFraction(float fraction) {
+	public void setMaxKvCacheEvictFraction(double fraction) {
 		if (fraction > 1 || fraction <= 0) {
 			throw new RuntimeException("Must be a number between 0 and 1");
 		} else {
@@ -76,7 +76,7 @@ public class KvStateConfig implements Serializable {
 	 * The maximum fraction of key-value states evicted from the cache if the
 	 * cache is full.
 	 */
-	public float getMaxKvCacheEvictFraction() {
+	public double getMaxKvCacheEvictFraction() {
 		return maxKvEvictFraction;
 	}
 

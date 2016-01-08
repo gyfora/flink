@@ -318,7 +318,7 @@ public class DbStateBackendTest {
 		conf.setMaxKvInsertBatchSize(2);
 
 		// We evict 2 elements when the cache is full
-		conf.setMaxKvCacheEvictFraction(0.6f);
+		conf.setMaxKvCacheEvictFraction(0.6);
 
 		DbStateBackend backend = new DbStateBackend(conf);
 

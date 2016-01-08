@@ -26,6 +26,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.KeyFunnel;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -41,33 +42,64 @@ public class CheckpointWriter implements AutoCloseable {
 
 	public static final int minBlockSize = 512;
 
-	private FSDataOutputStream fout;
-	private Writer writer;
+	private final FSDataOutputStream fout;
+	private final Writer writer;
+	private final int bloomFilterExpectedInserts;
+	private final double bloomFilterFPP;
 
 	public CheckpointWriter(Path path, FileSystem fs) throws IOException {
-		fout = fs.create(path);
-		writer = new Writer(fout, minBlockSize, "none", "memcmp", fs.getConf());
+		this(path, fs, 1000000, 0.0001);
 	}
 
-	public <V> void writeSorted(SortedMap<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
+	public CheckpointWriter(Path path, FileSystem fs, int bloomFilterExpectedInserts, double bloomFilterFPP)
 			throws IOException {
+		fout = fs.create(path);
+		writer = new Writer(fout, minBlockSize, "none", "memcmp", fs.getConf());
+		this.bloomFilterExpectedInserts = bloomFilterExpectedInserts;
+		this.bloomFilterFPP = bloomFilterFPP;
+	}
 
-		BloomFilter<byte[]> bloomFilter = BloomFilter.create(new KeyFunnel(), 1000000, 0.0001);
+	/**
+	 * Writes a {@link SortedMap} of byte[]-Optional<V> pairs to disk using the
+	 * given {@link TypeSerializer} to serialize the values. Returns the total
+	 * number of key and value Kbytes written.
+	 * 
+	 * @param kvPairs
+	 *            K-Optional<V> pairs to write
+	 * @param valueSerializer
+	 *            {@link TypeSerializer} for the values
+	 * @return Tuple2(totalKeyKBytes, totalValueKBytes)
+	 */
+	public <V> Tuple2<Double, Double> writeSorted(SortedMap<byte[], Optional<V>> kvPairs,
+			TypeSerializer<V> valueSerializer)
+					throws IOException {
+
+		long totalKeyBytes = 0;
+		long totalValueBytes = 0;
+
+		BloomFilter<byte[]> bloomFilter = BloomFilter.create(new KeyFunnel(), bloomFilterExpectedInserts,
+				bloomFilterFPP);
 
 		for (Entry<byte[], Optional<V>> kv : kvPairs.entrySet()) {
 
 			byte[] key = kv.getKey();
 			Optional<V> valueOption = kv.getValue();
+			byte[] valueBytes = valueOption.isPresent()
+					? InstantiationUtil.serializeToByteArray(valueSerializer, valueOption.get())
+					: new byte[0];
 
 			bloomFilter.put(key);
-			writer.append(key, valueOption.isPresent()
-					? InstantiationUtil.serializeToByteArray(valueSerializer, valueOption.get())
-					: new byte[0]);
+			writer.append(key, valueBytes);
+
+			totalKeyBytes += key.length;
+			totalValueBytes += valueBytes.length;
 		}
 
 		DataOutputStream mo = writer.prepareMetaBlock("bloomfilter");
 		bloomFilter.writeTo(mo);
 		mo.close();
+
+		return Tuple2.of(totalKeyBytes / 1024., totalValueBytes / 1024.);
 	}
 
 	public <V> void writeUnsorted(Map<byte[], Optional<V>> kvPairs, TypeSerializer<V> valueSerializer)
