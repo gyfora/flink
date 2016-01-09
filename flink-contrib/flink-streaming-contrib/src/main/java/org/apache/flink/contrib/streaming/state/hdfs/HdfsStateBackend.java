@@ -52,10 +52,11 @@ public class HdfsStateBackend extends FsStateBackend {
 	@Override
 	public <K, V> KvState<K, V, FsStateBackend> createKvState(String stateId, String stateName,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception {
-		Path p = new Path(new Path(checkpointDir, String.valueOf(env.getTaskInfo().getIndexOfThisSubtask())), stateId);
-		fs.mkdirs(p);
-		return new HdfsKvState<K, V>(kvStateConf, fs, p, new ArrayList<Path>(), keySerializer, valueSerializer,
-				defaultValue, 0);
+		Path path = new Path(new Path(checkpointDir, String.valueOf(env.getTaskInfo().getIndexOfThisSubtask())),
+				stateId);
+		fs.mkdirs(path);
+		return new HdfsKvState<K, V>(kvStateConf, keySerializer, valueSerializer,
+				defaultValue, 0, 0, fs, path, new ArrayList<Path>());
 	}
 
 	@Override

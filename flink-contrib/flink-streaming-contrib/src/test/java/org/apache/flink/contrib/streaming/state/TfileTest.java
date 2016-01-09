@@ -19,7 +19,6 @@
 package org.apache.flink.contrib.streaming.state;
 
 import java.io.IOException;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -50,7 +49,7 @@ public class TfileTest {
 
 		Path cpFile1 = new Path("/Users/gyulafora/Test/" + new Random().nextInt(100000));
 		FileSystem fs = cpFile1.getFileSystem(new Configuration());
-		
+
 		System.out.println(fs.mkdirs(cpFile1));
 
 		Map<Integer, Optional<Integer>> kvs = new HashMap<>();
@@ -66,15 +65,16 @@ public class TfileTest {
 
 		kvs.clear();
 
-//		kvs.put(1, Optional.of(3));
-//
-//		try (CheckpointWriter w = cf.createWriter(fs, cpFile1, null)) {
-//			w.writeUnsorted(kvs.entrySet(), IntSerializer.INSTANCE, IntSerializer.INSTANCE);
-//		} catch (Exception e) {
-//			throw new RuntimeException(e);
-//		}
-//
-//		kvs.clear();
+		// kvs.put(1, Optional.of(3));
+		//
+		// try (CheckpointWriter w = cf.createWriter(fs, cpFile1, null)) {
+		// w.writeUnsorted(kvs.entrySet(), IntSerializer.INSTANCE,
+		// IntSerializer.INSTANCE);
+		// } catch (Exception e) {
+		// throw new RuntimeException(e);
+		// }
+		//
+		// kvs.clear();
 
 		try (KeyScanner r = new KeyScanner(fs, Lists.newArrayList(cpFile1), new HdfsKvStateConfig(1000, 0.5, cf))) {
 			System.out.println(r.lookup(InstantiationUtil.serializeToByteArray(IntSerializer.INSTANCE, 1),
@@ -102,11 +102,13 @@ public class TfileTest {
 	}
 
 	private static void testState() throws Exception {
-		HdfsKvState<Integer, String> state = new HdfsKvState<>(new HdfsKvStateConfig(1000, 0.4),
+		HdfsKvState<Integer, String> state = new HdfsKvState<>(
+				new HdfsKvStateConfig(1000, 0.4),
+				IntSerializer.INSTANCE,
+				StringSerializer.INSTANCE, "a", 0, 0,
 				FileSystem.get(new Configuration()),
 				new Path("/Users/gyulafora/Test"),
-				new ArrayList<Path>(),
-				IntSerializer.INSTANCE, StringSerializer.INSTANCE, "a", 0);
+				new ArrayList<Path>());
 
 		state.setCurrentKey(1);
 
@@ -151,13 +153,17 @@ public class TfileTest {
 			throws Exception {
 
 		Random rnd = new Random();
+		Path p = new Path(path);
+		HdfsKvStateConfig c = new HdfsKvStateConfig(1000000, 1);
+		c.setCheckpointerFactory(cf);
 
-		HdfsKvState<Integer, String> state = new HdfsKvState<>(new HdfsKvStateConfig(1000000, 0.5, cf),
-				FileSystem.get(new URI("hdfs://172.31.29.148:9000/"), new Configuration()),
-				new Path(path),
-				new ArrayList<Path>(),
-				IntSerializer.INSTANCE, StringSerializer.INSTANCE, "a",
-				rnd.nextLong());
+		HdfsKvState<Integer, String> state = new HdfsKvState<>(
+				c,
+				IntSerializer.INSTANCE,
+				StringSerializer.INSTANCE, "a", 0, 0,
+				p.getFileSystem(new Configuration()),
+				p,
+				new ArrayList<Path>());
 
 		long start = System.nanoTime();
 
@@ -183,14 +189,15 @@ public class TfileTest {
 
 	public static void main(String[] args) throws Exception {
 		// testBasic2(new TFileCheckpointerFactory());
-//		 testBasic2(new MapFileCheckpointerFactory());
+		// testBasic2(new MapFileCheckpointerFactory());
 		// testFileCreation();
 		// testState();
-		
-		
-		benchmark(new MapFileCheckpointerFactory(), "/Users/gyulafora/Test/", 10000000, 1000000, 10000000);
 
-//		Path cpFile1 = new Path("/Users/gyulafora/Test/" + new Random().nextInt(100000));
-//		System.out.println(cpFile1.getFileSystem(new Configuration()).mkdirs(cpFile1));
+		benchmark(new MapFileCheckpointerFactory(), "/Users/gyulafora/Test/t1", 10000000, 1000000, 10000000);
+
+		// Path cpFile1 = new Path("/Users/gyulafora/Test/" + new
+		// Random().nextInt(100000));
+		// System.out.println(cpFile1.getFileSystem(new
+		// Configuration()).mkdirs(cpFile1));
 	}
 }

@@ -24,15 +24,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.contrib.streaming.state.OutOfCoreKvState;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -46,50 +43,34 @@ import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.collect.Lists;
 
-public class HdfsKvState<K, V> implements KvState<K, V, FsStateBackend> {
+public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(HdfsKvState.class);
 
-	private final HdfsKvStateConfig conf;
 	private final CheckpointerFactory cpFactory;
-
-	private final TypeSerializer<K> keySerializer;
-	private final TypeSerializer<V> valueSerializer;
-	private final V defaultValue;
-
-	private K currentKey;
-
-	private final StateCache cache;
 
 	private final Path cpParentDir;
 	private final KeyScanner scanner;
 
 	private final FileSystem fs;
 
-	private long nextTs = 0;
-
 	public HdfsKvState(
 			HdfsKvStateConfig kvStateConf,
-			FileSystem fs,
-			Path cpParentDir,
-			List<Path> cpFiles,
 			TypeSerializer<K> keySerializer,
 			TypeSerializer<V> valueSerializer,
 			V defaultValue,
-			long nextTs) {
+			long lastCheckpointTs,
+			long currentTs,
+			FileSystem fs,
+			Path cpParentDir,
+			List<Path> cpFiles) {
 
-		this.conf = kvStateConf;
-		this.cpFactory = conf.getCheckpointerFactory();
+		super(kvStateConf, keySerializer, valueSerializer, defaultValue, 0,
+				lastCheckpointTs, currentTs);
 
-		this.keySerializer = keySerializer;
-		this.valueSerializer = valueSerializer;
-
-		this.defaultValue = defaultValue;
-
-		this.nextTs = nextTs;
+		this.cpFactory = kvStateConf.getCheckpointerFactory();
 
 		this.cpParentDir = cpParentDir;
-		this.cache = new StateCache(conf.getKvCacheSize(), conf.getNumElementsToEvict());
 
 		// We make sure our lookup file a sorted in descending order by
 		// name (timestamp)
@@ -101,71 +82,12 @@ public class HdfsKvState<K, V> implements KvState<K, V, FsStateBackend> {
 			}
 		});
 
-		this.scanner = new KeyScanner(fs, sortedCpFiles, conf);
+		this.scanner = new KeyScanner(fs, sortedCpFiles, kvStateConf);
 		this.fs = fs;
 	}
 
-	public KeyScanner getKeyScanner() {
-		return scanner;
-	}
-
-	public StateCache getCache() {
-		return cache;
-	}
-
 	@Override
-	public void setCurrentKey(K key) {
-		this.currentKey = key;
-	}
-
-	@Override
-	public void update(V value) throws IOException {
-		try {
-			cache.put(currentKey, Optional.fromNullable(value));
-		} catch (RuntimeException e) {
-			// We need to catch the RuntimeExceptions thrown in the StateCache
-			// methods here
-			throw new IOException(e);
-		}
-	}
-
-	@Override
-	public V value() throws IOException {
-		try {
-			// We get the value from the cache (which will automatically load it
-			// from the database if necessary). If null, we return a copy of the
-			// default value
-			V val = cache.get(currentKey).orNull();
-			return val != null ? val : copyDefault();
-		} catch (RuntimeException e) {
-			// We need to catch the RuntimeExceptions thrown in the StateCache
-			// methods here
-			throw new IOException(e);
-		}
-	}
-
-	@Override
-	public KvStateSnapshot<K, V, FsStateBackend> snapshot(long checkpointId, long timestamp)
-			throws Exception {
-
-		LOG.debug("Starting hdfs snapshot {} @ {}", checkpointId, timestamp);
-
-		if (!cache.modified.isEmpty()) {
-			writeToDisk(cache.modified.entrySet(), timestamp);
-			cache.modified.clear();
-		}
-
-		nextTs = timestamp + 1;
-
-		LOG.debug("Completed hdfs snapshot {} @ {}", checkpointId, timestamp);
-
-		return new HdfsKvStateSnapshot<>(timestamp, cpParentDir, scanner.getPaths());
-	}
-
-	/**
-	 * Save modified K-V pairs to a new file on disk
-	 */
-	private void writeToDisk(Collection<Entry<K, Optional<V>>> modifiedKVs, long timestamp) {
+	public void snapshotModified(Collection<Entry<K, Optional<V>>> modifiedKVs, long checkpointId, long timestamp) {
 		if (!modifiedKVs.isEmpty()) {
 			// We use the timestamp as filename (this is assumed to be
 			// increasing between snapshots)
@@ -185,12 +107,26 @@ public class HdfsKvState<K, V> implements KvState<K, V, FsStateBackend> {
 		}
 	}
 
-	/**
-	 * Return a copy the default value or null if the default was null.
-	 * 
-	 */
-	private V copyDefault() {
-		return defaultValue != null ? valueSerializer.copy(defaultValue) : null;
+	@Override
+	public Optional<V> lookupLatest(K key) {
+		try {
+			final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
+
+			return scanner.lookup(serializedKey, valueSerializer);
+		} catch (IOException e) {
+			// We need to re-throw this exception to conform to the map
+			// interface, we will catch this when we call the the put/get
+			throw new RuntimeException("Could not get state for key: " + key, e);
+		}
+	}
+
+	@Override
+	public KvStateSnapshot<K, V, FsStateBackend> createSnapshot(long checkpointId, long timestamp) {
+		return new HdfsKvStateSnapshot<K, V>(timestamp, cpParentDir, scanner.getPaths());
+	}
+
+	public KeyScanner getKeyScanner() {
+		return scanner;
 	}
 
 	@Override
@@ -201,105 +137,6 @@ public class HdfsKvState<K, V> implements KvState<K, V, FsStateBackend> {
 	@Override
 	public void dispose() {
 		// Remove all files?
-	}
-
-	public final class StateCache extends LinkedHashMap<K, Optional<V>> {
-		private static final long serialVersionUID = 1L;
-
-		private final int cacheSize;
-		private final int evictionSize;
-
-		// We keep track the state modified since the last checkpoint
-		private final Map<K, Optional<V>> modified = new HashMap<>();
-
-		public StateCache(int cacheSize, int evictionSize) {
-			super(cacheSize, 0.75f, true);
-			this.cacheSize = cacheSize;
-			this.evictionSize = evictionSize;
-		}
-
-		@Override
-		public Optional<V> put(K key, Optional<V> value) {
-			// Put kv pair in the cache and evict elements if the cache is full
-			Optional<V> old = super.put(key, value);
-			modified.put(key, value);
-			evictIfFull();
-			return old;
-		}
-
-		@SuppressWarnings("unchecked")
-		@Override
-		public Optional<V> get(Object key) {
-			// First we check whether the value is cached
-			Optional<V> value = super.get(key);
-			if (value == null) {
-				value = getFromDisk((K) key);
-				put((K) key, value);
-			}
-			return value;
-		}
-
-		@Override
-		protected boolean removeEldestEntry(Entry<K, Optional<V>> eldest) {
-			// We need to remove elements manually if the cache becomes full, so
-			// we always return false here.
-			return false;
-		}
-
-		private Optional<V> getFromDisk(final K key) {
-			try {
-				final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
-
-				return scanner.lookup(serializedKey, valueSerializer);
-			} catch (IOException e) {
-				// We need to re-throw this exception to conform to the map
-				// interface, we will catch this when we call the the put/get
-				throw new RuntimeException("Could not get state for key: " + key, e);
-			}
-
-		}
-
-		private void evictIfFull() {
-			if (size() > cacheSize) {
-
-				int numEvicted = 0;
-				Iterator<Entry<K, Optional<V>>> entryIterator = entrySet().iterator();
-				List<Entry<K, Optional<V>>> toEvict = new ArrayList<>();
-
-				while (numEvicted++ < evictionSize && entryIterator.hasNext()) {
-
-					Entry<K, Optional<V>> next = entryIterator.next();
-
-					// We only need to write to the database if modified
-					if (modified.remove(next.getKey()) != null) {
-						toEvict.add(next);
-					}
-
-					entryIterator.remove();
-				}
-
-				writeToDisk(toEvict, nextTs);
-
-				nextTs++;
-
-			}
-		}
-
-		@Override
-		public void putAll(Map<? extends K, ? extends Optional<V>> m) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public void clear() {
-			super.clear();
-			modified.clear();
-		}
-
-		@Override
-		public String toString() {
-			return "Cache: " + super.toString() + "\nModified: " + modified;
-		}
 	}
 
 	private static class HdfsKvStateSnapshot<K, V> implements KvStateSnapshot<K, V, FsStateBackend> {
@@ -329,16 +166,15 @@ public class HdfsKvState<K, V> implements KvState<K, V, FsStateBackend> {
 
 			HdfsStateBackend backend = (HdfsStateBackend) stateBackend;
 
-			return new HdfsKvState<>(backend.getKvStateConf(), backend.getHadoopFileSystem(), new Path(cpParentDir),
+			return new HdfsKvState<>(backend.getKvStateConf(), keySerializer, valueSerializer,
+					defaultValue, timestamp, timestamp + 1, backend.getHadoopFileSystem(), new Path(cpParentDir),
 					Lists.transform(paths, new Function<URI, Path>() {
 
 						@Override
 						public Path apply(URI uri) {
 							return new Path(uri);
 						}
-					}),
-					keySerializer, valueSerializer, defaultValue,
-					timestamp + 1);
+					}));
 		}
 
 		@Override
