@@ -126,6 +126,11 @@ public class DerbyAdapter extends MySqlAdapter {
 	}
 
 	@Override
+	public void keepAlive(Connection con) throws SQLException {
+
+	}
+
+	@Override
 	public void insertBatch(final String stateId, final DbBackendConfig conf,
 			final Connection con, final PreparedStatement insertStatement, final long checkpointTs,
 			final List<Tuple2<byte[], byte[]>> toInsert) throws IOException {

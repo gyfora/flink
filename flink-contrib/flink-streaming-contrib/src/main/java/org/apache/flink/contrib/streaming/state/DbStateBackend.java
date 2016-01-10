@@ -38,7 +38,7 @@ import org.slf4j.LoggerFactory;
 /**
  * {@link StateBackend} for storing checkpoints in JDBC supporting databases.
  * Key-Value state is stored out-of-core and is lazily fetched using the
- * {@link LazyDbKvState} implementation. A different backend can also be
+ * {@link DbKvState} implementation. A different backend can also be
  * provided in the constructor to store the non-partitioned states. A common use
  * case would be to store the key-value states in the database and store larger
  * non-partitioned states on a distributed file system.
@@ -181,9 +181,9 @@ public class DbStateBackend extends StateBackend<DbStateBackend> {
 	}
 
 	@Override
-	public <K, V> LazyDbKvState<K, V> createKvState(String stateId, String stateName,
+	public <K, V> DbKvState<K, V> createKvState(String stateId, String stateName,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
-		return new LazyDbKvState<K, V>(
+		return new DbKvState<K, V>(
 				this,
 				stateId + "_" + env.getApplicationID().toShortString(),
 				env.getTaskInfo().getIndexOfThisSubtask() == 0,

@@ -21,7 +21,7 @@ import com.google.common.hash.Funnel;
 import com.google.common.hash.PrimitiveSink;
 
 /**
- * {@link Funnel} used by the bloomfilter of the {@link LazyDbKvState} for more
+ * {@link Funnel} used by the bloomfilter of the {@link DbKvState} for more
  * efficient key lookups.
  *
  */

@@ -133,11 +133,13 @@ public class DbStateBackendTest {
 
 		assertNotNull(backend.getConnections());
 		assertTrue(
-				isTableCreated(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+				isTableCreated(backend.getConnections().getFirst(),
+						"checkpoints_" + env.getApplicationID().toShortString()));
 
 		backend.disposeAllStateForCurrentJob();
 		assertFalse(
-				isTableCreated(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+				isTableCreated(backend.getConnections().getFirst(),
+						"checkpoints_" + env.getApplicationID().toShortString()));
 		backend.close();
 
 		assertTrue(backend.getConnections().getFirst().isClosed());
@@ -167,12 +169,14 @@ public class DbStateBackendTest {
 		assertEquals(state2, handle2.getState(getClass().getClassLoader()));
 		handle2.discardState();
 
-		assertFalse(isTableEmpty(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+		assertFalse(isTableEmpty(backend.getConnections().getFirst(),
+				"checkpoints_" + env.getApplicationID().toShortString()));
 
 		assertEquals(state3, handle3.getState(getClass().getClassLoader()));
 		handle3.discardState();
 
-		assertTrue(isTableEmpty(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+		assertTrue(isTableEmpty(backend.getConnections().getFirst(),
+				"checkpoints_" + env.getApplicationID().toShortString()));
 
 		backend.close();
 
@@ -193,7 +197,7 @@ public class DbStateBackendTest {
 
 			backend.initializeForJob(env);
 
-			LazyDbKvState<Integer, String> kv = backend.createKvState("state1_1", "state1", IntSerializer.INSTANCE,
+			DbKvState<Integer, String> kv = backend.createKvState("state1_1", "state1", IntSerializer.INSTANCE,
 					StringSerializer.INSTANCE, null);
 
 			String tableName = "state1_1_" + env.getApplicationID().toShortString();
@@ -270,9 +274,9 @@ public class DbStateBackendTest {
 		backend2.initializeForJob(new DummyEnvironment("test", 3, 1));
 		backend3.initializeForJob(new DummyEnvironment("test", 3, 2));
 
-		LazyDbKvState<?, ?> s1 = backend1.createKvState("a_1", "a", null, null, null);
-		LazyDbKvState<?, ?> s2 = backend2.createKvState("a_1", "a", null, null, null);
-		LazyDbKvState<?, ?> s3 = backend3.createKvState("a_1", "a", null, null, null);
+		DbKvState<?, ?> s1 = backend1.createKvState("a_1", "a", null, null, null);
+		DbKvState<?, ?> s2 = backend2.createKvState("a_1", "a", null, null, null);
+		DbKvState<?, ?> s3 = backend3.createKvState("a_1", "a", null, null, null);
 
 		assertTrue(s1.isCompactor());
 		assertFalse(s2.isCompactor());
@@ -330,13 +334,13 @@ public class DbStateBackendTest {
 
 		backend.initializeForJob(env);
 
-		LazyDbKvState<Integer, String> kv = backend.createKvState("state1_1", "state1", IntSerializer.INSTANCE,
+		DbKvState<Integer, String> kv = backend.createKvState("state1_1", "state1", IntSerializer.INSTANCE,
 				StringSerializer.INSTANCE, "a");
 
 		assertTrue(isTableCreated(DriverManager.getConnection(url1, "flink", "flink"), tableName));
 		assertTrue(isTableCreated(DriverManager.getConnection(url2, "flink", "flink"), tableName));
 
-		Map<Integer, Optional<String>> cache = kv.getStateCache();
+		Map<Integer, Optional<String>> cache = kv.getCache();
 		Map<Integer, Optional<String>> modified = kv.getModified();
 
 		assertEquals(0, kv.size());

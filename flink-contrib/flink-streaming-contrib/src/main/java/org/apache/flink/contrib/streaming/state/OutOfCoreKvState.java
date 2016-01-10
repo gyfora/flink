@@ -116,6 +116,12 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	public KvStateSnapshot<K, V, S> snapshot(long checkpointId, long timestamp)
 			throws Exception {
 
+		// Validate timing assumptions
+		if (timestamp <= currentTs) {
+			throw new RuntimeException("Checkpoint timestamp is smaller than previous ts + 1, "
+					+ "this should not happen.");
+		}
+
 		// We (incrementally) snapshot the modified states, then clear the
 		// containing map
 		if (!cache.modified.isEmpty()) {
@@ -151,8 +157,9 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	 *            The current checkpoint timestamp. This is assumed to be
 	 *            increasing.
 	 * @return The current {@link KvStateSnapshot}
+	 * @throws Exception
 	 */
-	public abstract KvStateSnapshot<K, V, S> createSnapshot(long checkpointId, long timestamp);
+	public abstract KvStateSnapshot<K, V, S> createSnapshot(long checkpointId, long timestamp) throws Exception;
 
 	/**
 	 * Snapshot (save) the states that were modified since the last checkpoint
@@ -169,7 +176,7 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	 *            increasing.
 	 */
 	public abstract void snapshotModified(Collection<Entry<K, Optional<V>>> modifiedKVs, long checkpointId,
-			long timestamp);
+			long timestamp) throws IOException;
 
 	/**
 	 * Save the given collection of state entries to the out-of-core storage so
@@ -188,9 +195,10 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	 * @param currentTs
 	 *            Current timestamp (greater or equal to the last checkpoint
 	 *            timestamp)
+	 * @throws IOException
 	 */
 	public void evictModified(Collection<Entry<K, Optional<V>>> KVsToEvict, long lastCheckpointId,
-			long lastCheckpointTs, long currentTs) {
+			long lastCheckpointTs, long currentTs) throws IOException {
 		snapshotModified(KVsToEvict, lastCheckpointId + 1, currentTs);
 	}
 
@@ -199,7 +207,7 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	 * 
 	 * @param key
 	 *            Key to lookup.
-	 * @return Returns {@link Optional#of(Value)} if exists or
+	 * @return Returns {@link Optional#of(..)} if exists or
 	 *         {@link Optional#absent()} if missing.
 	 */
 	public abstract Optional<V> lookupLatest(K key);
@@ -227,7 +235,7 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 		private final int evictionSize;
 
 		// We keep track the state modified since the last checkpoint
-		private final Map<K, Optional<V>> modified = new HashMap<>();
+		protected final Map<K, Optional<V>> modified = new HashMap<>();
 
 		public StateCache(int cacheSize, int evictionSize) {
 			super(cacheSize, 0.75f, true);
@@ -282,7 +290,11 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 					entryIterator.remove();
 				}
 
-				evictModified(toEvict, lastCheckpointId, lastCheckpointTs, currentTs);
+				try {
+					evictModified(toEvict, lastCheckpointId, lastCheckpointTs, currentTs);
+				} catch (IOException e) {
+					throw new RuntimeException(e);
+				}
 
 				currentTs++;
 

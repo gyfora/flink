@@ -24,9 +24,8 @@ import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -55,9 +54,9 @@ import com.google.common.hash.BloomFilter;
  * cached on heap and are lazily retrieved on access.
  * 
  */
-public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, CheckpointNotifier {
+public class DbKvState<K, V> extends OutOfCoreKvState<K, V, DbStateBackend> implements CheckpointNotifier {
 
-	private static final Logger LOG = LoggerFactory.getLogger(LazyDbKvState.class);
+	private static final Logger LOG = LoggerFactory.getLogger(DbKvState.class);
 
 	// ------------------------------------------------------
 
@@ -66,12 +65,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	// Unique id for this state (appID_operatorID_stateName)
 	private final String kvStateId;
 	private final boolean compact;
-
-	private K currentKey;
-	private final V defaultValue;
-
-	private final TypeSerializer<K> keySerializer;
-	private final TypeSerializer<V> valueSerializer;
 
 	// ------------------------------------------------------
 
@@ -100,36 +93,36 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 
 	// ------------------------------------------------------
 
-	// LRU cache for the key-value states backed by the database
-	private final StateCache cache;
-
-	private long nextTs;
 	private Map<Long, Long> completedCheckpoints = new HashMap<>();
 
 	private volatile long lastCompactedTs;
 
 	private BloomFilter<byte[]> bloomFilter = null;
 
+	long lookupTime = 0;
+	long lookupCount = 0;
 	// ------------------------------------------------------
 
 	/**
-	 * Constructor to initialize the {@link LazyDbKvState} the first time the
-	 * job starts.
+	 * Constructor to initialize the {@link DbKvState} the first time the job
+	 * starts.
 	 */
-	public LazyDbKvState(DbStateBackend backend, String kvStateId, boolean compact, ShardedConnection cons,
+	public DbKvState(DbStateBackend backend, String kvStateId, boolean compact, ShardedConnection cons,
 			DbBackendConfig conf,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws IOException {
 		this(backend, kvStateId, compact, cons, conf, keySerializer, valueSerializer, defaultValue, 1, 0, null);
 	}
 
 	/**
-	 * Initialize the {@link LazyDbKvState} from a snapshot.
+	 * Initialize the {@link DbKvState} from a snapshot.
 	 */
-	public LazyDbKvState(DbStateBackend backend, String kvStateId, boolean compact, ShardedConnection cons,
+	public DbKvState(DbStateBackend backend, String kvStateId, boolean compact, ShardedConnection cons,
 			final DbBackendConfig conf,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue, long nextTs,
 			long lastCompactedTs, BloomFilter<byte[]> restoredFilter)
 					throws IOException {
+
+		super(conf, keySerializer, valueSerializer, defaultValue, 0, 0, nextTs);
 
 		this.backend = backend;
 
@@ -140,10 +133,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			executor = Executors.newSingleThreadExecutor();
 		}
 
-		this.keySerializer = keySerializer;
-		this.valueSerializer = valueSerializer;
-		this.defaultValue = defaultValue;
-
 		this.maxInsertBatchSize = conf.getMaxKvInsertBatchSize();
 		this.conf = conf;
 		this.connections = cons;
@@ -152,10 +141,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		this.numSqlRetries = conf.getMaxNumberOfSqlRetries();
 		this.sqlRetrySleep = conf.getSleepBetweenSqlRetries();
 
-		this.nextTs = nextTs;
 		this.lastCompactedTs = lastCompactedTs;
-
-		this.cache = new StateCache(conf.getKvCacheSize(), conf.getNumElementsToEvict());
 
 		initDB(this.connections);
 
@@ -179,55 +165,20 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	}
 
 	@Override
-	public void setCurrentKey(K key) {
-		this.currentKey = key;
+	public void snapshotModified(Collection<Entry<K, Optional<V>>> modifiedKVs, long checkpointId, long timestamp)
+			throws IOException {
+		for (Entry<K, Optional<V>> state : modifiedKVs) {
+			batchInsert.add(state, timestamp);
+		}
+		batchInsert.flush(timestamp);
 	}
 
 	@Override
-	public void update(V value) throws IOException {
-		try {
-			cache.put(currentKey, Optional.fromNullable(value));
-		} catch (RuntimeException e) {
-			// We need to catch the RuntimeExceptions thrown in the StateCache
-			// methods here
-			throw new IOException(e);
-		}
-	}
+	public KvStateSnapshot<K, V, DbStateBackend> snapshot(long checkpointId, long timestamp) throws Exception {
 
-	@Override
-	public V value() throws IOException {
-		try {
-			// We get the value from the cache (which will automatically load it
-			// from the database if necessary). If null, we return a copy of the
-			// default value
-			V val = cache.get(currentKey).orNull();
-			return val != null ? val : copyDefault();
-		} catch (RuntimeException e) {
-			// We need to catch the RuntimeExceptions thrown in the StateCache
-			// methods here
-			throw new IOException(e);
-		}
-	}
+		KvStateSnapshot<K, V, DbStateBackend> cp = super.snapshot(checkpointId, timestamp);
 
-	@Override
-	public DbKvStateSnapshot<K, V> snapshot(long checkpointId, long timestamp) throws Exception {
-
-		// Validate timing assumptions
-		if (timestamp <= nextTs) {
-			throw new RuntimeException("Checkpoint timestamp is smaller than previous ts + 1, "
-					+ "this should not happen.");
-		}
-
-		// If there are any modified states we perform the inserts
-		if (!cache.modified.isEmpty()) {
-			// We insert the modified elements to the database with the current
-			// timestamp then clear the modified states
-			for (Entry<K, Optional<V>> state : cache.modified.entrySet()) {
-				batchInsert.add(state, timestamp);
-			}
-			batchInsert.flush(timestamp);
-			cache.modified.clear();
-		} else if (compact) {
+		if (compact) {
 			// Otherwise we call the keep alive method to avoid dropped
 			// connections (only call this on the compactor instance)
 			for (final Connection c : connections.connections()) {
@@ -241,9 +192,13 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			}
 		}
 
-		nextTs = timestamp + 1;
 		completedCheckpoints.put(checkpointId, timestamp);
 
+		return cp;
+	}
+
+	@Override
+	public KvStateSnapshot<K, V, DbStateBackend> createSnapshot(long checkpointId, long timestamp) throws Exception {
 		// If the bloomfilter is enabled we need to checkpoint that
 		StreamStateHandle filterCheckpoint = null;
 
@@ -258,6 +213,53 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		return new DbKvStateSnapshot<K, V>(kvStateId, timestamp, lastCompactedTs, filterCheckpoint);
 	}
 
+	@Override
+	public Optional<V> lookupLatest(final K key) {
+		try {
+			final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
+
+			boolean dbMightContain = bloomFilter == null || !bloomFilter.put(serializedKey);
+
+			if (dbMightContain) {
+				return retry(new Callable<Optional<V>>() {
+					public Optional<V> call() throws Exception {
+						// We lookup using the adapter and
+						// serialize/deserialize
+						// with the TypeSerializers
+						long start = System.nanoTime();
+
+						byte[] serializedVal = dbAdapter.lookupKey(kvStateId,
+								selectStatements.getForKey(key), serializedKey, currentTs);
+
+						if (LOG.isDebugEnabled()) {
+							lookupTime += (System.nanoTime() - start) / 1000000;
+							lookupCount++;
+
+							if (lookupCount % 10000 == 0) {
+								LOG.debug("Total lookup time (numRecords, lookupTime(ms)): ({},{})",
+										lookupCount, lookupTime);
+								lookupCount = 0;
+								lookupTime = 0;
+							}
+						}
+
+						return serializedVal != null
+								? Optional
+										.of(InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal))
+								: Optional.<V> absent();
+					}
+				}, numSqlRetries, sqlRetrySleep);
+			} else {
+				return Optional.absent();
+			}
+
+		} catch (Exception e) {
+			// We need to re-throw this exception to conform to the map
+			// interface, we will catch this when we call the the put/get
+			throw new RuntimeException("Could not get state for key: " + key + " from the database.", e);
+		}
+	}
+
 	/**
 	 * Returns the number of elements currently stored in the task's cache. Note
 	 * that the number of elements in the database is not counted here.
@@ -265,14 +267,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	@Override
 	public int size() {
 		return cache.size();
-	}
-
-	/**
-	 * Return a copy the default value or null if the default was null.
-	 * 
-	 */
-	private V copyDefault() {
-		return defaultValue != null ? valueSerializer.copy(defaultValue) : null;
 	}
 
 	/**
@@ -332,14 +326,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 	}
 
 	/**
-	 * Return the Map of cached states.
-	 * 
-	 */
-	public Map<K, Optional<V>> getStateCache() {
-		return cache;
-	}
-
-	/**
 	 * Return the Map of modified states that hasn't been written to the
 	 * database yet.
 	 * 
@@ -389,7 +375,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		}
 
 		@Override
-		public LazyDbKvState<K, V> restoreState(final DbStateBackend stateBackend,
+		public DbKvState<K, V> restoreState(final DbStateBackend stateBackend,
 				final TypeSerializer<K> keySerializer, final TypeSerializer<V> valueSerializer, final V defaultValue,
 				ClassLoader cl, final long recoveryTimestamp) throws Exception {
 
@@ -430,7 +416,7 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			}
 
 			// Restore the KvState
-			LazyDbKvState<K, V> restored = new LazyDbKvState<K, V>(stateBackend, kvStateId, compactor,
+			DbKvState<K, V> restored = new DbKvState<K, V>(stateBackend, kvStateId, compactor,
 					stateBackend.getConnections(), stateBackend.getConfiguration(), keySerializer, valueSerializer,
 					defaultValue, recoveryTimestamp, lastCompactedTimestamp, restoredFilter);
 
@@ -453,165 +439,6 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 			return 0;
 		}
 
-	}
-
-	/**
-	 * LRU cache implementation for storing the key-value states. When the cache
-	 * is full elements are not evicted one by one but are evicted in a batch
-	 * defined by the evictionSize parameter.
-	 * <p>
-	 * Keys not found in the cached will be retrieved from the underlying
-	 * database
-	 */
-	private final class StateCache extends LinkedHashMap<K, Optional<V>> {
-		private static final long serialVersionUID = 1L;
-
-		private final int cacheSize;
-		private final int evictionSize;
-
-		// Keep some stats for debugging
-		long lookupTime = 0;
-		long lookupCount = 0;
-
-		// We keep track the state modified since the last checkpoint
-		private final Map<K, Optional<V>> modified = new HashMap<>();
-
-		public StateCache(int cacheSize, int evictionSize) {
-			super(cacheSize, 0.75f, true);
-			this.cacheSize = cacheSize;
-			this.evictionSize = evictionSize;
-		}
-
-		@Override
-		public Optional<V> put(K key, Optional<V> value) {
-			// Put kv pair in the cache and evict elements if the cache is full
-			Optional<V> old = super.put(key, value);
-			modified.put(key, value);
-			evictIfFull();
-			return old;
-		}
-
-		@SuppressWarnings("unchecked")
-		@Override
-		public Optional<V> get(Object key) {
-			// First we check whether the value is cached
-			Optional<V> value = super.get(key);
-			if (value == null) {
-				// If it doesn't try to load it from the database
-				value = Optional.fromNullable(getFromDatabaseOrNull((K) key));
-				put((K) key, value);
-			}
-			return value;
-		}
-
-		@Override
-		protected boolean removeEldestEntry(Entry<K, Optional<V>> eldest) {
-			// We need to remove elements manually if the cache becomes full, so
-			// we always return false here.
-			return false;
-		}
-
-		/**
-		 * Fetch the current value from the database if exists or return null.
-		 * 
-		 * @param key
-		 * @return The value corresponding to the key and the last checkpointid
-		 *         from the database if exists or null.
-		 */
-		private V getFromDatabaseOrNull(final K key) {
-			try {
-				final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
-
-				boolean dbMightContain = bloomFilter == null || !bloomFilter.put(serializedKey);
-
-				if (dbMightContain) {
-					return retry(new Callable<V>() {
-						public V call() throws Exception {
-							// We lookup using the adapter and
-							// serialize/deserialize
-							// with the TypeSerializers
-							long start = System.nanoTime();
-
-							byte[] serializedVal = dbAdapter.lookupKey(kvStateId,
-									selectStatements.getForKey(key), serializedKey, nextTs);
-
-							if (LOG.isDebugEnabled()) {
-								lookupTime += (System.nanoTime() - start) / 1000000;
-								lookupCount++;
-
-								if (lookupCount % 10000 == 0) {
-									LOG.debug("Total lookup time (numRecords, lookupTime(ms)): ({},{})",
-											lookupCount, lookupTime);
-									lookupCount = 0;
-									lookupTime = 0;
-								}
-							}
-
-							return serializedVal != null
-									? InstantiationUtil.deserializeFromByteArray(valueSerializer, serializedVal) : null;
-						}
-					}, numSqlRetries, sqlRetrySleep);
-				} else {
-					return null;
-				}
-
-			} catch (Exception e) {
-				// We need to re-throw this exception to conform to the map
-				// interface, we will catch this when we call the the put/get
-				throw new RuntimeException("Could not get state for key: " + key + " from the database.", e);
-			}
-		}
-
-		/**
-		 * If the cache is full we remove the evictionSize least recently
-		 * accessed elements and write them to the database if they were
-		 * modified since the last checkpoint.
-		 */
-		private void evictIfFull() {
-			if (size() > cacheSize) {
-				if (LOG.isDebugEnabled()) {
-					LOG.debug("State cache is full for {}, evicting {} elements.", kvStateId, evictionSize);
-				}
-				try {
-					int numEvicted = 0;
-
-					Iterator<Entry<K, Optional<V>>> entryIterator = entrySet().iterator();
-					while (numEvicted++ < evictionSize && entryIterator.hasNext()) {
-
-						Entry<K, Optional<V>> next = entryIterator.next();
-
-						// We only need to write to the database if modified
-						if (modified.remove(next.getKey()) != null) {
-							batchInsert.add(next, nextTs);
-						}
-
-						entryIterator.remove();
-					}
-
-					batchInsert.flush(nextTs);
-					// We increment the next ts so we avoid overwriting the
-					// values in the database (this allows more efficient
-					// inserts and we will compact later anyways)
-					nextTs++;
-
-				} catch (IOException e) {
-					// We need to re-throw this exception to conform to the map
-					// interface, we will catch this when we call the the
-					// put/get
-					throw new RuntimeException(e);
-				}
-			}
-		}
-
-		@Override
-		public void putAll(Map<? extends K, ? extends Optional<V>> m) {
-			throw new UnsupportedOperationException();
-		}
-
-		@Override
-		public void clear() {
-			throw new UnsupportedOperationException();
-		}
 	}
 
 	/**
@@ -689,7 +516,9 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 				long valueSize = 0L;
 				for (Tuple2<byte[], byte[]> t : kvPairs) {
 					keySize += t.f0.length;
-					valueSize += t.f1.length;
+					if (t.f1 != null) {
+						valueSize += t.f1.length;
+					}
 				}
 				keySize = keySize / 1024;
 				valueSize = valueSize / 1024;
@@ -745,4 +574,5 @@ public class LazyDbKvState<K, V> implements KvState<K, V, DbStateBackend>, Check
 		}
 
 	}
+
 }
