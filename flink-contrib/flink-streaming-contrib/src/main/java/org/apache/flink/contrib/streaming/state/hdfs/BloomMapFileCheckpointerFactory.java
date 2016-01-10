@@ -24,18 +24,18 @@ import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
-public class MapFileCheckpointerFactory implements CheckpointerFactory {
+public class BloomMapFileCheckpointerFactory implements CheckpointerFactory {
 
 	private static final long serialVersionUID = 1L;
 
 	@Override
 	public CheckpointReader createReader(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
-		return new MapFileCheckpointReader(path);
+		return new BloomMapFileCheckpointReader(path);
 	}
 
 	@Override
 	public CheckpointWriter createWriter(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
-		return new MapFileCheckpointWriter(path);
+		return new BloomMapFileCheckpointWriter(path);
 	}
 
 }

@@ -41,7 +41,6 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 
 	private static final Logger LOG = LoggerFactory.getLogger(OutOfCoreKvState.class);
 
-	
 	protected final KvStateConfig conf;
 
 	protected final TypeSerializer<K> keySerializer;
@@ -117,11 +116,14 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	public KvStateSnapshot<K, V, S> snapshot(long checkpointId, long timestamp)
 			throws Exception {
 
+		// We (incrementally) snapshot the modified states, then clear the
+		// containing map
 		if (!cache.modified.isEmpty()) {
 			snapshotModified(cache.modified.entrySet(), checkpointId, timestamp);
 			cache.modified.clear();
 		}
 
+		// Create a snapshot that will be used to restore this state
 		KvStateSnapshot<K, V, S> snapshot = createSnapshot(checkpointId, timestamp);
 
 		lastCheckpointTs = timestamp;
@@ -131,17 +133,76 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 		return snapshot;
 	}
 
+	/**
+	 * Create a {@link KvStateSnapshot} for the current id and timestamp. It is
+	 * not assumed that a checkpoint will always successfully complete (it might
+	 * fail at other tasks as well). Therefore the snapshot should contain
+	 * enough information so that it can clean up the partially failed records
+	 * to maintain the exactly-once semantics.
+	 * <p>
+	 * For instance if the snapshot is taken based on the timestamp, we can use
+	 * the checkpoint timestamp and recovery timestamp to delete records between
+	 * those two.
+	 * 
+	 * @param checkpointId
+	 *            The current checkpoint id. This is not assumed to be always
+	 *            increasing.
+	 * @param timestamp
+	 *            The current checkpoint timestamp. This is assumed to be
+	 *            increasing.
+	 * @return The current {@link KvStateSnapshot}
+	 */
 	public abstract KvStateSnapshot<K, V, S> createSnapshot(long checkpointId, long timestamp);
 
+	/**
+	 * Snapshot (save) the states that were modified since the last checkpoint
+	 * to the out-of-core storage layer. (For instance write to database or
+	 * disk)
+	 * 
+	 * @param modifiedKVs
+	 *            Collection of Key-Optional<State> entries to be checkpointed.
+	 * @param checkpointId
+	 *            The current checkpoint id. This is not assumed to be always
+	 *            increasing.
+	 * @param timestamp
+	 *            The current checkpoint timestamp. This is assumed to be
+	 *            increasing.
+	 */
 	public abstract void snapshotModified(Collection<Entry<K, Optional<V>>> modifiedKVs, long checkpointId,
 			long timestamp);
 
-	public abstract Optional<V> lookupLatest(K key);
-
-	public void evictModified(List<Entry<K, Optional<V>>> toEvict, long lastCheckpointId,
+	/**
+	 * Save the given collection of state entries to the out-of-core storage so
+	 * that it can retrieved later. This method is called when the state cache
+	 * is full and wants to evict elements.
+	 * <p>
+	 * Records written by this method will not be part of the previous snapshot
+	 * but should be part of the next one.
+	 * 
+	 * @param KVsToEvict
+	 *            Collection of Key-Optional<State> entries to be evicted.
+	 * @param lastCheckpointId
+	 *            The checkpoint id of the last checkpoint.
+	 * @param lastCheckpointTs
+	 *            The timestamp of the last checkpoint.
+	 * @param currentTs
+	 *            Current timestamp (greater or equal to the last checkpoint
+	 *            timestamp)
+	 */
+	public void evictModified(Collection<Entry<K, Optional<V>>> KVsToEvict, long lastCheckpointId,
 			long lastCheckpointTs, long currentTs) {
-		snapshotModified(toEvict, lastCheckpointId + 1, currentTs);
+		snapshotModified(KVsToEvict, lastCheckpointId + 1, currentTs);
 	}
+
+	/**
+	 * Lookup latest entry for a specific key from the out-of-core storage.
+	 * 
+	 * @param key
+	 *            Key to lookup.
+	 * @return Returns {@link Optional#of(Value)} if exists or
+	 *         {@link Optional#absent()} if missing.
+	 */
+	public abstract Optional<V> lookupLatest(K key);
 
 	/**
 	 * Return a copy the default value or null if the default was null.
@@ -151,6 +212,14 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 		return defaultValue != null ? valueSerializer.copy(defaultValue) : null;
 	}
 
+	/**
+	 * LRU cache implementation for storing the key-value states. When the cache
+	 * is full elements are not evicted one by one but are evicted in a batch
+	 * defined in the {@link KvStateConfig}.
+	 * <p>
+	 * Keys not found in the cached will be retrieved from the underlying
+	 * out-of-core storage
+	 */
 	public final class StateCache extends LinkedHashMap<K, Optional<V>> {
 		private static final long serialVersionUID = 1L;
 
@@ -236,6 +305,5 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 			return "Cache: " + super.toString() + "\nModified: " + modified;
 		}
 	}
-
 
 }

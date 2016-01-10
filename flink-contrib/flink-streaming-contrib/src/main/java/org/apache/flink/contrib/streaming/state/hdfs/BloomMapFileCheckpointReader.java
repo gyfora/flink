@@ -20,22 +20,35 @@ package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
 
-import org.apache.flink.contrib.streaming.state.KvStateConfig;
-import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.BloomMapFile.Reader;
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.MapFile;
 
-public class MapFileCheckpointerFactory implements CheckpointerFactory {
+public class BloomMapFileCheckpointReader implements CheckpointReader {
 
 	private static final long serialVersionUID = 1L;
 
-	@Override
-	public CheckpointReader createReader(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
-		return new MapFileCheckpointReader(path);
+	private MapFile.Reader reader;
+
+	public BloomMapFileCheckpointReader(Path path) throws IOException {
+		reader = createReader(path);
+	}
+
+	public MapFile.Reader createReader(Path path) throws IOException {
+		return new Reader(path, new Configuration());
+	}
+
+	public byte[] lookup(byte[] key) throws IOException {
+		BytesWritable val = new BytesWritable();
+		reader.get(new BytesWritable(key), val);
+		return val.getBytes();
 	}
 
 	@Override
-	public CheckpointWriter createWriter(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
-		return new MapFileCheckpointWriter(path);
+	public void close() throws Exception {
+		reader.close();
 	}
 
 }

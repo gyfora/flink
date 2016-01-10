@@ -32,7 +32,7 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsStateBackend;
-import org.apache.flink.contrib.streaming.state.hdfs.MapFileCheckpointerFactory;
+import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -53,7 +53,7 @@ public class HdfsStateCheckpointingTest extends StreamFaultToleranceTestBase {
 
 		try {
 			env.setStateBackend(new HdfsStateBackend("file:///Users/gyulafora/Test",
-					new HdfsKvStateConfig(10000, 1, new MapFileCheckpointerFactory())));
+					new HdfsKvStateConfig(10000, 1, new BloomMapFileCheckpointerFactory())));
 		} catch (IOException e) {
 			e.printStackTrace();
 		}

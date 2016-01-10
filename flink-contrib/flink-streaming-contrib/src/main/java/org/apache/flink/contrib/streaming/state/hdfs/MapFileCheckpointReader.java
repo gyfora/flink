@@ -21,31 +21,21 @@ package org.apache.flink.contrib.streaming.state.hdfs;
 import java.io.IOException;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.BloomMapFile.Reader;
-import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.MapFile;
+import org.apache.hadoop.io.MapFile.Reader;
 
-public class MapFileCheckpointReader implements CheckpointReader {
+public class MapFileCheckpointReader extends BloomMapFileCheckpointReader {
+
+	public MapFileCheckpointReader(Path path) throws IOException {
+		super(path);
+	}
 
 	private static final long serialVersionUID = 1L;
 
-	private Reader reader;
-
-	public MapFileCheckpointReader(Path path, FileSystem fs) throws IOException {
-		reader = new Reader(path, new Configuration());
-
-	}
-
-	public byte[] lookup(byte[] key) throws IOException {
-		BytesWritable val = new BytesWritable();
-		reader.get(new BytesWritable(key), val);
-		return val.getBytes();
-	}
-
 	@Override
-	public void close() throws Exception {
-		reader.close();
+	public MapFile.Reader createReader(Path path) throws IOException {
+		return new Reader(path, new Configuration());
 	}
 
 }

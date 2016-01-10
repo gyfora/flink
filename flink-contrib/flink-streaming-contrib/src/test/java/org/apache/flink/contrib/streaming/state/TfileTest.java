@@ -31,7 +31,7 @@ import org.apache.flink.contrib.streaming.state.hdfs.CheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvState;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner;
-import org.apache.flink.contrib.streaming.state.hdfs.MapFileCheckpointerFactory;
+import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.conf.Configuration;
@@ -149,7 +149,7 @@ public class TfileTest {
 
 	}
 
-	private static void benchmark(CheckpointerFactory cf, String path, int numInserts, int numLookups, int numKeys)
+	private static void benchmark(CheckpointerFactory cf, String path, long numInserts, long numLookups, int numKeys)
 			throws Exception {
 
 		Random rnd = new Random();
@@ -167,7 +167,7 @@ public class TfileTest {
 
 		long start = System.nanoTime();
 
-		for (int i = 0; i < numInserts; i++) {
+		for (long i = 0; i < numInserts; i++) {
 			state.setCurrentKey(rnd.nextInt(numKeys));
 			state.update(String.valueOf(i));
 		}
@@ -178,7 +178,7 @@ public class TfileTest {
 		start = System.nanoTime();
 
 		state.getCache().clear();
-		for (int i = 0; i < numLookups; i++) {
+		for (long i = 0; i < numLookups; i++) {
 			state.setCurrentKey(rnd.nextInt(numKeys));
 			state.value();
 		}
@@ -193,7 +193,7 @@ public class TfileTest {
 		// testFileCreation();
 		// testState();
 
-		benchmark(new MapFileCheckpointerFactory(), "/Users/gyulafora/Test/t1", 10000000, 1000000, 10000000);
+		benchmark(new BloomMapFileCheckpointerFactory(), "/Users/gyulafora/Test/t1", 10000000, 1000000, 10000000);
 
 		// Path cpFile1 = new Path("/Users/gyulafora/Test/" + new
 		// Random().nextInt(100000));
