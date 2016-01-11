@@ -77,7 +77,8 @@ public class TfileTest {
 		//
 		// kvs.clear();
 
-		try (KeyScanner r = new KeyScanner(fs, Lists.newArrayList(cpFile1), new HdfsKvStateConfig(1000, 0.5, cf))) {
+		try (KeyScanner r = new KeyScanner(fs, null, Lists.newArrayList(cpFile1),
+				new HdfsKvStateConfig(1000, 0.5, cf))) {
 			System.out.println(r.lookup(InstantiationUtil.serializeToByteArray(IntSerializer.INSTANCE, 1),
 					IntSerializer.INSTANCE));
 			System.out.println(r.lookup(InstantiationUtil.serializeToByteArray(IntSerializer.INSTANCE, 2),
@@ -198,7 +199,7 @@ public class TfileTest {
 
 		benchmark(new TFileCheckpointerFactory(), "/Users/gyulafora/Test/" + rnd.nextInt(), 10000000, 1000000,
 				10000000);
-		
+
 		benchmark(new BloomMapFileCheckpointerFactory(), "/Users/gyulafora/Test/" + rnd.nextInt(), 10000000, 1000000,
 				10000000);
 

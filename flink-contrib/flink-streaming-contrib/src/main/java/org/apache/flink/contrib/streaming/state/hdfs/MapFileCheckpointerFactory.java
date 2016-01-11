@@ -19,6 +19,7 @@
 package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
+import java.util.List;
 
 import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.hadoop.fs.FileSystem;
@@ -36,6 +37,12 @@ public class MapFileCheckpointerFactory implements CheckpointerFactory {
 	@Override
 	public CheckpointWriter createWriter(FileSystem fs, Path path, KvStateConfig conf) throws IOException {
 		return new MapFileCheckpointWriter(path);
+	}
+
+	@Override
+	public CheckpointMerger createMerger(FileSystem fs, List<Path> paths, Path outPath, KvStateConfig conf)
+			throws IOException {
+		return null;
 	}
 
 }

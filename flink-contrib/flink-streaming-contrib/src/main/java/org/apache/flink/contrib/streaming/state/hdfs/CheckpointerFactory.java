@@ -20,6 +20,7 @@ package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.List;
 
 import org.apache.flink.contrib.streaming.state.KvStateConfig;
 import org.apache.hadoop.fs.FileSystem;
@@ -30,4 +31,7 @@ public interface CheckpointerFactory extends Serializable {
 	CheckpointReader createReader(FileSystem fs, Path path, KvStateConfig conf) throws IOException;
 
 	CheckpointWriter createWriter(FileSystem fs, Path path, KvStateConfig conf) throws IOException;
+
+	CheckpointMerger createMerger(FileSystem fs, List<Path> inPaths, Path outPath, KvStateConfig conf)
+			throws IOException;
 }

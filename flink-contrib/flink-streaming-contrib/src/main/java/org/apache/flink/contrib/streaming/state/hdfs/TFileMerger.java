@@ -19,30 +19,49 @@
 package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 
-import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.BloomMapFile.Reader;
-import org.apache.hadoop.io.BloomMapFile.Writer;
-import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.io.WritableComparator;
+import org.apache.hadoop.io.file.tfile.TFile.Reader;
+import org.apache.hadoop.io.file.tfile.TFile.Reader.Scanner;
+import org.apache.hadoop.io.file.tfile.TFile.Reader.Scanner.Entry;
 
-public class BloomMapFileMerger implements CheckpointMerger {
-	private WritableComparator comparator = new BytesWritable.Comparator();
+import com.google.common.primitives.UnsignedBytes;
+
+public class TFileMerger implements CheckpointMerger {
+	private Comparator<byte[]> comparator = UnsignedBytes.lexicographicalComparator();
 	private Reader[] inReaders;
-	private Writer outWriter;
+	private Scanner[] scanners;
+	private TFileCheckpointWriter outWriter;
 
-	public BloomMapFileMerger(Configuration conf, List<Path> inMapFiles, Path outMapFile) throws IOException {
+	public TFileMerger(FileSystem fs, List<Path> inMapFiles, Path outMapFile) throws IOException {
 		inReaders = new Reader[inMapFiles.size()];
+		scanners = new Scanner[inMapFiles.size()];
 		for (int i = 0; i < inMapFiles.size(); i++) {
-			inReaders[i] = new Reader(inMapFiles.get(i), conf);
+			Path path = inMapFiles.get(i);
+			inReaders[i] = new Reader(fs.open(path), fs.getFileStatus(path).getLen(), fs.getConf());
+			scanners[i] = inReaders[i].createScanner();
 		}
 
-		outWriter = new Writer(conf, outMapFile,
-				Writer.keyClass(BytesWritable.class),
-				Writer.valueClass(BytesWritable.class));
+		outWriter = new TFileCheckpointWriter(outMapFile, fs);
+	}
+
+	private void readNext(int index, byte[][] keys, byte[][] values) throws IOException {
+		Scanner s = scanners[index];
+		if (!s.atEnd()) {
+			Entry entry = scanners[index].entry();
+			keys[index] = new byte[entry.getKeyLength()];
+			values[index] = new byte[entry.getValueLength()];
+			entry.getKey(keys[index]);
+			entry.getValue(values[index]);
+			s.advance();
+		} else {
+			keys[index] = null;
+			values[index] = null;
+		}
 	}
 
 	/**
@@ -56,29 +75,29 @@ public class BloomMapFileMerger implements CheckpointMerger {
 	 */
 	public void merge() throws IOException {
 		// re-usable array
-		BytesWritable[] keys = new BytesWritable[inReaders.length];
-		BytesWritable[] values = new BytesWritable[inReaders.length];
+		byte[][] keys = new byte[inReaders.length][];
+		byte[][] values = new byte[inReaders.length][];
 		// Read first key/value from all inputs
 		for (int i = 0; i < inReaders.length; i++) {
-			keys[i] = new BytesWritable();
-			values[i] = new BytesWritable();
-			if (!inReaders[i].next(keys[i], values[i])) {
-				// Handle empty files
-				keys[i] = null;
-				values[i] = null;
-			}
+			readNext(i, keys, values);
 		}
 
 		do {
 			int currentEntry = -1;
-			BytesWritable currentKey = null;
-			BytesWritable currentValue = null;
+			byte[] currentKey = null;
+			byte[] currentValue = null;
 			for (int i = 0; i < keys.length; i++) {
 				if (keys[i] == null) {
 					// Skip Readers reached EOF
 					continue;
 				}
 				if (currentKey == null || comparator.compare(currentKey, keys[i]) > 0) {
+					currentEntry = i;
+					currentKey = keys[i];
+					currentValue = values[i];
+				} else if (currentKey != null && comparator.compare(currentKey, keys[i]) == 0) {
+					// If equal keep latest, drop oldest
+					readNext(currentEntry, keys, values);
 					currentEntry = i;
 					currentKey = keys[i];
 					currentValue = values[i];
@@ -90,25 +109,22 @@ public class BloomMapFileMerger implements CheckpointMerger {
 			}
 			// Write the selected key/value to merge stream
 			outWriter.append(currentKey, currentValue);
-			// Replace the already written key/value in keys/values arrays with
-			// the next key/value from the selected input
-			if (!inReaders[currentEntry].next(keys[currentEntry],
-					values[currentEntry])) {
-				// EOF for this file
-				keys[currentEntry] = null;
-				values[currentEntry] = null;
-			}
+			readNext(currentEntry, keys, values);
 		} while (true);
 	}
 
-	public void close() throws IOException {
-		for (int i = 0; i < inReaders.length; i++) {
-			IOUtils.closeStream(inReaders[i]);
-			inReaders[i] = null;
-		}
+	public void close() throws Exception {
+
 		if (outWriter != null) {
 			outWriter.close();
 			outWriter = null;
+		}
+
+		for (int i = 0; i < inReaders.length; i++) {
+			IOUtils.closeStream(inReaders[i]);
+			IOUtils.closeStream(scanners[i]);
+			inReaders[i] = null;
+			scanners[i] = null;
 		}
 	}
 }

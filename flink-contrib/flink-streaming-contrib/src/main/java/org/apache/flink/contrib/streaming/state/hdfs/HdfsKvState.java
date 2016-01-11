@@ -24,12 +24,15 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.OutOfCoreKvState;
+import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner.Interval;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -63,7 +66,7 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 			long currentTs,
 			FileSystem fs,
 			Path cpParentDir,
-			List<Path> cpFiles) {
+			Map<Interval, Path> cpFiles) {
 
 		super(kvStateConf, keySerializer, valueSerializer, defaultValue, 0,
 				lastCheckpointTs, currentTs);
@@ -72,17 +75,7 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 		this.cpParentDir = cpParentDir;
 
-		// We make sure our lookup file a sorted in descending order by
-		// name (timestamp)
-		List<Path> sortedCpFiles = new ArrayList<>(cpFiles);
-		Collections.sort(cpFiles, new Comparator<Path>() {
-			@Override
-			public int compare(Path o1, Path o2) {
-				return -1 * Long.compare(Long.parseLong(o1.getName()), Long.parseLong(o1.getName()));
-			}
-		});
-
-		this.scanner = new KeyScanner(fs, sortedCpFiles, kvStateConf);
+		this.scanner = new KeyScanner(fs, cpParentDir, cpFiles, kvStateConf);
 		this.fs = fs;
 	}
 
@@ -103,7 +96,7 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 			}
 
 			// Add the new checkpoint file to the scanner for future lookups
-			scanner.addNewLookupFile(cpFile);
+			scanner.addNewLookupFile(timestamp, cpFile);
 		}
 	}
 
@@ -122,7 +115,7 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 	@Override
 	public KvStateSnapshot<K, V, FsStateBackend> createSnapshot(long checkpointId, long timestamp) {
-		return new HdfsKvStateSnapshot<K, V>(timestamp, cpParentDir, scanner.getPaths());
+		return new HdfsKvStateSnapshot<K, V>(timestamp, cpParentDir, scanner.getIntervalMapping());
 	}
 
 	public KeyScanner getKeyScanner() {
@@ -145,18 +138,15 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 		private long timestamp;
 		private URI cpParentDir;
-		private List<URI> paths;
+		private Map<Interval, URI> paths;
 
-		public HdfsKvStateSnapshot(long timestamp, Path cpParentDir, List<Path> paths) {
+		public HdfsKvStateSnapshot(long timestamp, Path cpParentDir, Map<Interval, Path> paths) {
 			this.timestamp = timestamp;
 			this.cpParentDir = cpParentDir.toUri();
-			this.paths = new ArrayList<>(Lists.transform(paths, new Function<Path, URI>() {
-
-				@Override
-				public URI apply(Path path) {
-					return path.toUri();
-				}
-			}));
+			this.paths = new HashMap<>();
+			for (Entry<Interval, Path> e : paths.entrySet()) {
+				this.paths.put(e.getKey(), e.getValue().toUri());
+			}
 		}
 
 		@Override
@@ -165,15 +155,15 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 						throws Exception {
 
 			HdfsStateBackend backend = (HdfsStateBackend) stateBackend;
+
+			Map<Interval, Path> restoredPaths = new HashMap<>();
+			for (Entry<Interval, URI> e : paths.entrySet()) {
+				restoredPaths.put(e.getKey(), new Path(e.getValue()));
+			}
+
 			return new HdfsKvState<>(backend.getKvStateConf(), keySerializer, valueSerializer,
 					defaultValue, timestamp, timestamp + 1, backend.getHadoopFileSystem(), new Path(cpParentDir),
-					new ArrayList<>(Lists.transform(paths, new Function<URI, Path>() {
-
-						@Override
-						public Path apply(URI uri) {
-							return new Path(uri);
-						}
-					})));
+					restoredPaths);
 		}
 
 		@Override

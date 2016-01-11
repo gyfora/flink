@@ -19,28 +19,36 @@
 package org.apache.flink.contrib.streaming.state;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
-import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
+import org.apache.flink.contrib.streaming.state.hdfs.CheckpointWriter;
 import org.apache.flink.contrib.streaming.state.hdfs.CheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvState;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsStateBackend;
+import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner;
+import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner.Interval;
 import org.apache.flink.contrib.streaming.state.hdfs.MapFileCheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.TFileCheckpointerFactory;
 import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
+import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.junit.Test;
+
+import com.google.common.base.Optional;
 
 public class HdfsStateTest {
 
@@ -66,7 +74,7 @@ public class HdfsStateTest {
 				StringSerializer.INSTANCE, "", 0, 0,
 				FileSystem.get(new Configuration()),
 				new Path(p),
-				new ArrayList<Path>());
+				new HashMap<Interval, Path>());
 
 		put(state, 1, "a");
 		put(state, 2, "b");
@@ -91,6 +99,8 @@ public class HdfsStateTest {
 		assertEquals("-d", get(state, 4));
 		assertEquals("e", get(state, 5));
 		assertEquals("f", get(state, 6));
+
+		state.getKeyScanner().merge(0, 2);
 
 		KvStateSnapshot<Integer, String, FsStateBackend> s = state.snapshot(1000, 1000);
 
@@ -128,7 +138,57 @@ public class HdfsStateTest {
 	public void test() throws Exception {
 		runTest(new TFileCheckpointerFactory());
 		runTest(new BloomMapFileCheckpointerFactory());
-		runTest(new MapFileCheckpointerFactory());
+		// runTest(new MapFileCheckpointerFactory());
+	}
+
+	@Test
+	public void testMerge() throws Exception {
+
+		testMerge(new TFileCheckpointerFactory());
+		testMerge(new BloomMapFileCheckpointerFactory());
+	}
+
+	public void testMerge(CheckpointerFactory cf) throws IllegalArgumentException, Exception {
+
+		Random rnd = new Random();
+
+		IntSerializer is = IntSerializer.INSTANCE;
+		FileSystem fs = FileSystem.get(new Configuration());
+		HdfsKvStateConfig conf = new HdfsKvStateConfig(111, 1);
+		conf.setCheckpointerFactory(cf);
+		String cpDir = "/Users/gyulafora/Test/" + rnd.nextInt() + "/";
+		KeyScanner scanner = new KeyScanner(fs, new Path(cpDir), new HashMap<Interval, Path>(),
+				conf);
+
+		Map<Integer, Optional<Integer>> kv = new HashMap<>();
+		kv.put(0, Optional.of(0));
+		kv.put(1, Optional.of(1));
+
+		try (CheckpointWriter w = cf.createWriter(fs, new Path(cpDir + "1"), conf)) {
+			w.writeUnsorted(kv.entrySet(), is, is);
+		}
+
+		scanner.addNewLookupFile(1, new Path(cpDir + "1"));
+
+		kv.clear();
+		kv.put(1, Optional.of(2));
+
+		try (CheckpointWriter w = cf.createWriter(fs, new Path(cpDir + "2"), conf)) {
+			w.writeUnsorted(kv.entrySet(), is, is);
+		}
+
+		scanner.addNewLookupFile(2, new Path(cpDir + "2"));
+
+		assertEquals(Optional.of(0), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 0), is));
+		assertEquals(Optional.of(2), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 1), is));
+
+		scanner.merge(1, 2);
+
+		assertEquals(Optional.of(0), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 0), is));
+		assertEquals(Optional.of(2), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 1), is));
+
+		assertTrue(fs.exists(new Path(cpDir + "merged_1_2")));
+
 	}
 
 }

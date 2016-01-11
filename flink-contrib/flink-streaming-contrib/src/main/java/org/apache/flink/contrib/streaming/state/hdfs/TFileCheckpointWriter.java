@@ -43,8 +43,7 @@ public class TFileCheckpointWriter extends AbstractCheckpointWriter {
 
 	private final FSDataOutputStream fout;
 	private final Writer writer;
-	private final int bloomFilterExpectedInserts;
-	private final double bloomFilterFPP;
+	private final BloomFilter<byte[]> bloomFilter;
 
 	public TFileCheckpointWriter(Path path, FileSystem fs) throws IOException {
 		this(path, fs, 1000000, 0.0001);
@@ -54,8 +53,8 @@ public class TFileCheckpointWriter extends AbstractCheckpointWriter {
 			throws IOException {
 		fout = fs.create(path);
 		writer = new Writer(fout, minBlockSize, "none", "memcmp", fs.getConf());
-		this.bloomFilterExpectedInserts = bloomFilterExpectedInserts;
-		this.bloomFilterFPP = bloomFilterFPP;
+		this.bloomFilter = BloomFilter.create(new KeyFunnel(), bloomFilterExpectedInserts,
+				bloomFilterFPP);
 	}
 
 	/**
@@ -76,9 +75,6 @@ public class TFileCheckpointWriter extends AbstractCheckpointWriter {
 		long totalKeyBytes = 0;
 		long totalValueBytes = 0;
 
-		BloomFilter<byte[]> bloomFilter = BloomFilter.create(new KeyFunnel(), bloomFilterExpectedInserts,
-				bloomFilterFPP);
-
 		for (Entry<byte[], Optional<V>> kv : kvPairs.entrySet()) {
 
 			byte[] key = kv.getKey();
@@ -87,22 +83,25 @@ public class TFileCheckpointWriter extends AbstractCheckpointWriter {
 					? InstantiationUtil.serializeToByteArray(valueSerializer, valueOption.get())
 					: new byte[0];
 
-			bloomFilter.put(key);
-			writer.append(key, valueBytes);
+			append(key, valueBytes);
 
 			totalKeyBytes += key.length;
 			totalValueBytes += valueBytes.length;
 		}
 
-		DataOutputStream mo = writer.prepareMetaBlock("bloomfilter");
-		bloomFilter.writeTo(mo);
-		mo.close();
-
 		return Tuple2.of(totalKeyBytes / 1024., totalValueBytes / 1024.);
+	}
+
+	public void append(byte[] key, byte[] value) throws IOException {
+		bloomFilter.put(key);
+		writer.append(key, value);
 	}
 
 	@Override
 	public void close() throws Exception {
+		DataOutputStream mo = writer.prepareMetaBlock("bloomfilter");
+		bloomFilter.writeTo(mo);
+		mo.close();
 		writer.close();
 		fout.close();
 	}
