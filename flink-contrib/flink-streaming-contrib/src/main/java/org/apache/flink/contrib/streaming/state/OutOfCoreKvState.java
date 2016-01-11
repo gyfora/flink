@@ -27,6 +27,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.runtime.state.KvState;
@@ -54,6 +56,8 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	protected long lastCheckpointId;
 	protected long lastCheckpointTs;
 	protected long currentTs;
+
+	protected final SortedMap<Long, Long> completedCheckpoints = new TreeMap<>();
 
 	public OutOfCoreKvState(
 			KvStateConfig kvStateConf,
@@ -122,6 +126,8 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 					+ "this should not happen.");
 		}
 
+		preSnapshot(checkpointId, timestamp);
+
 		// We (incrementally) snapshot the modified states, then clear the
 		// containing map
 		if (!cache.modified.isEmpty()) {
@@ -131,6 +137,10 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 
 		// Create a snapshot that will be used to restore this state
 		KvStateSnapshot<K, V, S> snapshot = createSnapshot(checkpointId, timestamp);
+
+		postSnapshot(checkpointId, timestamp);
+
+		completedCheckpoints.put(checkpointId, timestamp);
 
 		lastCheckpointTs = timestamp;
 		currentTs = timestamp + 1;
@@ -218,6 +228,24 @@ public abstract class OutOfCoreKvState<K, V, S extends StateBackend<S>> implemen
 	 */
 	private V copyDefault() {
 		return defaultValue != null ? valueSerializer.copy(defaultValue) : null;
+	}
+
+	public void preSnapshot(long checkpointId, long timestamp) throws Exception {
+
+	}
+
+	public void postSnapshot(long checkpointId, long timestamp) throws Exception {
+
+	}
+
+	/**
+	 * Returns the number of elements currently stored in the task's cache. Note
+	 * that the number of elements in the out-of-core storage is not counted
+	 * here.
+	 */
+	@Override
+	public int size() {
+		return cache.size();
 	}
 
 	/**

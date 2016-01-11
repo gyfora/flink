@@ -23,7 +23,6 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.util.InstantiationUtil;
@@ -32,16 +31,13 @@ import org.apache.hadoop.fs.Path;
 
 import com.google.common.base.Optional;
 
-public class KeyScanner implements AutoCloseable {
-
-	private Map<Long, Path> timestampToPath = new TreeMap<>();
-
+public class KeyScanner2 implements AutoCloseable {
 	private final LinkedList<Path> paths;
 	private final Map<Path, CheckpointReader> openReaders = new HashMap<>();
 	private final FileSystem fs;
 	private final HdfsKvStateConfig conf;
 
-	public KeyScanner(FileSystem fs, List<Path> paths, HdfsKvStateConfig conf) {
+	public KeyScanner2(FileSystem fs, List<Path> paths, HdfsKvStateConfig conf) {
 		this.paths = new LinkedList<>(paths);
 		this.fs = fs;
 		this.conf = conf;

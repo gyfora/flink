@@ -42,8 +42,8 @@ public class BloomMapFileCheckpointReader implements CheckpointReader {
 
 	public byte[] lookup(byte[] key) throws IOException {
 		BytesWritable val = new BytesWritable();
-		reader.get(new BytesWritable(key), val);
-		return val.getBytes();
+		BytesWritable read = (BytesWritable) reader.get(new BytesWritable(key), val);
+		return read != null ? read.getBytes() : null;
 	}
 
 	@Override

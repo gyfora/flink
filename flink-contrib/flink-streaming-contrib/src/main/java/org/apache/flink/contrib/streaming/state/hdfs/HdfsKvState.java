@@ -165,16 +165,15 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 						throws Exception {
 
 			HdfsStateBackend backend = (HdfsStateBackend) stateBackend;
-
 			return new HdfsKvState<>(backend.getKvStateConf(), keySerializer, valueSerializer,
 					defaultValue, timestamp, timestamp + 1, backend.getHadoopFileSystem(), new Path(cpParentDir),
-					Lists.transform(paths, new Function<URI, Path>() {
+					new ArrayList<>(Lists.transform(paths, new Function<URI, Path>() {
 
 						@Override
 						public Path apply(URI uri) {
 							return new Path(uri);
 						}
-					}));
+					})));
 		}
 
 		@Override

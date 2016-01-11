@@ -32,6 +32,7 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsStateBackend;
+import org.apache.flink.contrib.streaming.state.hdfs.TFileCheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -125,7 +126,7 @@ public class HdfsStateCheckpointingTest extends StreamFaultToleranceTestBase {
 					ctx.collect(index % NUM_KEYS);
 				}
 
-				if (rnd.nextDouble() < 0.025) {
+				if (rnd.nextDouble() < 0.05) {
 					Thread.sleep(1);
 				}
 			}
@@ -151,11 +152,13 @@ public class HdfsStateCheckpointingTest extends StreamFaultToleranceTestBase {
 
 		private static Map<Integer, Long> allSums = new ConcurrentHashMap<Integer, Long>();
 
-		private static volatile boolean hasFailed = false;
+		private static volatile int hasFailed = 0;
 
 		private final long numElements;
 
-		private long failurePos;
+		private long failurePos1;
+		private long failurePos2;
+
 		private long count;
 
 		private OperatorState<Long> sum;
@@ -166,10 +169,9 @@ public class HdfsStateCheckpointingTest extends StreamFaultToleranceTestBase {
 
 		@Override
 		public void open(Configuration parameters) throws IOException {
-			long failurePosMin = (long) (0.7 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
-			long failurePosMax = (long) (0.8 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
+			failurePos1 = (long) (0.4 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
+			failurePos2 = (long) (0.8 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
 
-			failurePos = (new Random().nextLong() % (failurePosMax - failurePosMin)) + failurePosMin;
 			count = 0;
 			sum = getRuntimeContext().getKeyValueState("my_state", Long.class, 0L);
 		}
@@ -177,9 +179,14 @@ public class HdfsStateCheckpointingTest extends StreamFaultToleranceTestBase {
 		@Override
 		public Tuple2<Integer, Long> map(Integer value) throws Exception {
 			count++;
-			if (!hasFailed && count >= failurePos) {
-				hasFailed = true;
-				throw new Exception("Test Failure");
+			if (hasFailed == 0 && count == failurePos1) {
+				hasFailed = 1;
+				throw new Exception("Test Failure 1");
+			}
+
+			if (hasFailed == 1 && count == failurePos2) {
+				hasFailed = 2;
+				throw new Exception("Test Failure 2");
 			}
 
 			long currentSum = sum.value() + value;

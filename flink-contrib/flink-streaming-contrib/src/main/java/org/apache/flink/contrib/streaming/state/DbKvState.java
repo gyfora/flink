@@ -93,8 +93,6 @@ public class DbKvState<K, V> extends OutOfCoreKvState<K, V, DbStateBackend> impl
 
 	// ------------------------------------------------------
 
-	private Map<Long, Long> completedCheckpoints = new HashMap<>();
-
 	private volatile long lastCompactedTs;
 
 	private BloomFilter<byte[]> bloomFilter = null;
@@ -174,10 +172,7 @@ public class DbKvState<K, V> extends OutOfCoreKvState<K, V, DbStateBackend> impl
 	}
 
 	@Override
-	public KvStateSnapshot<K, V, DbStateBackend> snapshot(long checkpointId, long timestamp) throws Exception {
-
-		KvStateSnapshot<K, V, DbStateBackend> cp = super.snapshot(checkpointId, timestamp);
-
+	public void postSnapshot(long checkpointId, long timestamp) throws Exception {
 		if (compact) {
 			// Otherwise we call the keep alive method to avoid dropped
 			// connections (only call this on the compactor instance)
@@ -191,11 +186,7 @@ public class DbKvState<K, V> extends OutOfCoreKvState<K, V, DbStateBackend> impl
 				}, numSqlRetries, sqlRetrySleep);
 			}
 		}
-
-		completedCheckpoints.put(checkpointId, timestamp);
-
-		return cp;
-	}
+	};
 
 	@Override
 	public KvStateSnapshot<K, V, DbStateBackend> createSnapshot(long checkpointId, long timestamp) throws Exception {
@@ -258,15 +249,6 @@ public class DbKvState<K, V> extends OutOfCoreKvState<K, V, DbStateBackend> impl
 			// interface, we will catch this when we call the the put/get
 			throw new RuntimeException("Could not get state for key: " + key + " from the database.", e);
 		}
-	}
-
-	/**
-	 * Returns the number of elements currently stored in the task's cache. Note
-	 * that the number of elements in the database is not counted here.
-	 */
-	@Override
-	public int size() {
-		return cache.size();
 	}
 
 	/**

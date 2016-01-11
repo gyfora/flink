@@ -26,12 +26,13 @@ import java.util.Random;
 
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
+import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.CheckpointWriter;
 import org.apache.flink.contrib.streaming.state.hdfs.CheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvState;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner;
-import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
+import org.apache.flink.contrib.streaming.state.hdfs.TFileCheckpointerFactory;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.conf.Configuration;
@@ -193,7 +194,13 @@ public class TfileTest {
 		// testFileCreation();
 		// testState();
 
-		benchmark(new BloomMapFileCheckpointerFactory(), "/Users/gyulafora/Test/t1", 10000000, 1000000, 10000000);
+		Random rnd = new Random();
+
+		benchmark(new TFileCheckpointerFactory(), "/Users/gyulafora/Test/" + rnd.nextInt(), 10000000, 1000000,
+				10000000);
+		
+		benchmark(new BloomMapFileCheckpointerFactory(), "/Users/gyulafora/Test/" + rnd.nextInt(), 10000000, 1000000,
+				10000000);
 
 		// Path cpFile1 = new Path("/Users/gyulafora/Test/" + new
 		// Random().nextInt(100000));
