@@ -45,6 +45,13 @@ public class BloomMapFileMerger implements CheckpointMerger {
 				Writer.valueClass(BytesWritable.class));
 	}
 
+	private void readNext(int i, BytesWritable[] keys, BytesWritable[] values) throws IOException {
+		if (!inReaders[i].next(keys[i], values[i])) {
+			keys[i] = null;
+			values[i] = null;
+		}
+	}
+
 	/**
 	 * Merge all input files to output map file.<br>
 	 * 1. Read first key/value from all input files to keys/values array. <br>
@@ -62,11 +69,7 @@ public class BloomMapFileMerger implements CheckpointMerger {
 		for (int i = 0; i < inReaders.length; i++) {
 			keys[i] = new BytesWritable();
 			values[i] = new BytesWritable();
-			if (!inReaders[i].next(keys[i], values[i])) {
-				// Handle empty files
-				keys[i] = null;
-				values[i] = null;
-			}
+			readNext(i, keys, values);
 		}
 
 		do {
@@ -82,6 +85,11 @@ public class BloomMapFileMerger implements CheckpointMerger {
 					currentEntry = i;
 					currentKey = keys[i];
 					currentValue = values[i];
+				} else if (currentKey != null && comparator.compare(currentKey, keys[i]) == 0) {
+					readNext(currentEntry, keys, values);
+					currentEntry = i;
+					currentKey = keys[i];
+					currentValue = values[i];
 				}
 			}
 			if (currentKey == null) {
@@ -92,12 +100,7 @@ public class BloomMapFileMerger implements CheckpointMerger {
 			outWriter.append(currentKey, currentValue);
 			// Replace the already written key/value in keys/values arrays with
 			// the next key/value from the selected input
-			if (!inReaders[currentEntry].next(keys[currentEntry],
-					values[currentEntry])) {
-				// EOF for this file
-				keys[currentEntry] = null;
-				values[currentEntry] = null;
-			}
+			readNext(currentEntry, keys, values);
 		} while (true);
 	}
 
