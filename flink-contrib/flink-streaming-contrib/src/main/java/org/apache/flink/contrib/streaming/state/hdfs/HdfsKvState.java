@@ -20,19 +20,17 @@ package org.apache.flink.contrib.streaming.state.hdfs;
 
 import java.io.IOException;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.OutOfCoreKvState;
-import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner.Interval;
+import org.apache.flink.contrib.streaming.state.hdfs.HdfsCheckpointManager.Interval;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
@@ -42,20 +40,15 @@ import org.apache.hadoop.fs.Path;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Function;
 import com.google.common.base.Optional;
-import com.google.common.collect.Lists;
 
 public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(HdfsKvState.class);
 
-	private final CheckpointerFactory cpFactory;
-
 	private final Path cpParentDir;
-	private final KeyScanner scanner;
-
-	private final FileSystem fs;
+	private final HdfsCheckpointManager checkpointManager;
+	private final ExecutorService executor;
 
 	public HdfsKvState(
 			HdfsKvStateConfig kvStateConf,
@@ -71,33 +64,42 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 		super(kvStateConf, keySerializer, valueSerializer, defaultValue, 0,
 				lastCheckpointTs, currentTs);
 
-		this.cpFactory = kvStateConf.getCheckpointerFactory();
-
 		this.cpParentDir = cpParentDir;
 
-		this.scanner = new KeyScanner(fs, cpParentDir, cpFiles, kvStateConf);
-		this.fs = fs;
+		this.checkpointManager = new HdfsCheckpointManager(fs, cpParentDir, cpFiles, kvStateConf);
+		this.executor = Executors.newSingleThreadExecutor();
 	}
 
 	@Override
-	public void snapshotModified(Collection<Entry<K, Optional<V>>> modifiedKVs, long checkpointId, long timestamp) {
-		if (!modifiedKVs.isEmpty()) {
-			// We use the timestamp as filename (this is assumed to be
-			// increasing between snapshots)
-			Path cpFile = new Path(cpParentDir, String.valueOf(timestamp));
+	public void snapshotModified(Collection<Entry<K, Optional<V>>> modifiedKVs, long checkpointId,
+			final long timestamp) {
 
-			// Write the sorted k-v pairs to the new file
-			try (CheckpointWriter writer = cpFactory.createWriter(fs, cpFile, conf)) {
-				Tuple2<Double, Double> kbytesWritten = writer.writeUnsorted(modifiedKVs, keySerializer,
-						valueSerializer);
-				LOG.debug("Successfully written checkpoint to disk - (keyKBytes, valueKBytes) = {}", kbytesWritten);
-			} catch (Exception e) {
-				throw new RuntimeException("Could not write checkpoint to disk.", e);
+		Tuple2<Double, Double> kbytesWritten = checkpointManager.snapshot(modifiedKVs, timestamp, keySerializer,
+				valueSerializer);
+
+		LOG.debug("Successfully written checkpoint to disk - (keyKBytes, valueKBytes) = {}", kbytesWritten);
+
+		executor.execute(new Runnable() {
+
+			@Override
+			public void run() {
+				try {
+					checkpointManager.mergeAndRemove(lastCheckpointTs, timestamp);
+					LOG.info("Succesfully compacted states between: {} and {}", lastCheckpointTs + 1, timestamp);
+				} catch (IOException e) {
+					LOG.info("Error while compacting states: {}", e.getMessage());
+				}
 			}
+		});
+	}
 
-			// Add the new checkpoint file to the scanner for future lookups
-			scanner.addNewLookupFile(timestamp, cpFile);
-		}
+	@Override
+	public void evictModified(Collection<Entry<K, Optional<V>>> KVsToEvict, long lastCheckpointId,
+			long lastCheckpointTs, long currentTs) throws IOException {
+
+		Tuple2<Double, Double> kbytesWritten = checkpointManager.snapshot(KVsToEvict, currentTs, keySerializer,
+				valueSerializer);
+		LOG.debug("Successfully evicted state to disk - (keyKBytes, valueKBytes) = {}", kbytesWritten);
 	}
 
 	@Override
@@ -105,7 +107,7 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 		try {
 			final byte[] serializedKey = InstantiationUtil.serializeToByteArray(keySerializer, key);
 
-			return scanner.lookup(serializedKey, valueSerializer);
+			return checkpointManager.lookupKey(serializedKey, valueSerializer);
 		} catch (IOException e) {
 			// We need to re-throw this exception to conform to the map
 			// interface, we will catch this when we call the the put/get
@@ -115,11 +117,11 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 	@Override
 	public KvStateSnapshot<K, V, FsStateBackend> createSnapshot(long checkpointId, long timestamp) {
-		return new HdfsKvStateSnapshot<K, V>(timestamp, cpParentDir, scanner.getIntervalMapping());
+		return new HdfsKvStateSnapshot<K, V>(timestamp, cpParentDir, checkpointManager.getIntervalMapping());
 	}
 
-	public KeyScanner getKeyScanner() {
-		return scanner;
+	public HdfsCheckpointManager getKeyScanner() {
+		return checkpointManager;
 	}
 
 	@Override
@@ -129,7 +131,10 @@ public class HdfsKvState<K, V> extends OutOfCoreKvState<K, V, FsStateBackend> {
 
 	@Override
 	public void dispose() {
-		// Remove all files?
+		try {
+			checkpointManager.close();
+		} catch (Exception e) {
+		}
 	}
 
 	private static class HdfsKvStateSnapshot<K, V> implements KvStateSnapshot<K, V, FsStateBackend> {

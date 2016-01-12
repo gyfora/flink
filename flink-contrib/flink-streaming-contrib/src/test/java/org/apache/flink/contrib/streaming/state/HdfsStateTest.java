@@ -21,21 +21,27 @@ package org.apache.flink.contrib.streaming.state;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.hdfs.BloomMapFileCheckpointerFactory;
 import org.apache.flink.contrib.streaming.state.hdfs.CheckpointWriter;
 import org.apache.flink.contrib.streaming.state.hdfs.CheckpointerFactory;
+import org.apache.flink.contrib.streaming.state.hdfs.HdfsCheckpointManager;
+import org.apache.flink.contrib.streaming.state.hdfs.HdfsCheckpointManager.Interval;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvState;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsKvStateConfig;
 import org.apache.flink.contrib.streaming.state.hdfs.HdfsStateBackend;
-import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner;
-import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner.Interval;
 import org.apache.flink.contrib.streaming.state.hdfs.TFileCheckpointerFactory;
 import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
 import org.apache.flink.runtime.state.KvState;
@@ -45,11 +51,16 @@ import org.apache.flink.util.InstantiationUtil;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.junit.AfterClass;
 import org.junit.Test;
 
 import com.google.common.base.Optional;
 
 public class HdfsStateTest {
+
+	private static Random rnd = new Random();
+	private static List<Path> dirsToRemove = Collections.synchronizedList(new ArrayList<Path>());
+	private static final Path TEMP_DIR_PATH = new Path(new File(System.getProperty("java.io.tmpdir")).toURI());
 
 	private static void put(KvState<Integer, String, ?> state, Integer key, String value) throws IOException {
 		state.setCurrentKey(key);
@@ -61,9 +72,23 @@ public class HdfsStateTest {
 		return state.value();
 	}
 
+	@AfterClass
+	public static void removeTempDirs() throws IOException {
+		FileSystem fs = FileSystem.get(new Configuration());
+		for (Path p : dirsToRemove) {
+			try {
+				fs.delete(p, true);
+			} catch (Exception e) {
+			}
+		}
+	}
+
 	private static void runTest(CheckpointerFactory cf) throws Exception {
-		Random rnd = new Random();
-		String p = "file:///Users/gyulafora/Test/" + rnd.nextInt();
+		FileSystem fs = FileSystem.get(new Configuration());
+
+		Path cpDir = new Path(TEMP_DIR_PATH, String.valueOf(rnd.nextLong()));
+		dirsToRemove.add(cpDir);
+
 		HdfsKvStateConfig conf = new HdfsKvStateConfig(3, 1);
 		conf.setCheckpointerFactory(cf);
 
@@ -71,8 +96,8 @@ public class HdfsStateTest {
 				conf,
 				IntSerializer.INSTANCE,
 				StringSerializer.INSTANCE, "", 0, 0,
-				FileSystem.get(new Configuration()),
-				new Path(p),
+				fs,
+				cpDir,
 				new HashMap<Interval, Path>());
 
 		put(state, 1, "a");
@@ -102,6 +127,12 @@ public class HdfsStateTest {
 		state.getKeyScanner().merge(0, 2);
 
 		KvStateSnapshot<Integer, String, FsStateBackend> s = state.snapshot(1000, 1000);
+		Thread.sleep(100);
+
+		Tuple2<Path, Set<Path>> m1 = state.getKeyScanner().merge(0, 1000);
+		for (Path pToRemove : m1.f1) {
+			fs.delete(pToRemove, true);
+		}
 
 		assertEquals("-a", get(state, 1));
 		assertEquals("-b", get(state, 2));
@@ -117,11 +148,12 @@ public class HdfsStateTest {
 
 		state.snapshot(1010, 1010);
 
-		FsStateBackend b = new HdfsStateBackend(p, conf);
+		FsStateBackend b = new HdfsStateBackend(cpDir.toString(), conf);
 		b.initializeForJob(new DummyEnvironment("", 1, 0));
 
+		state.dispose();
 		state = null;
-		KvState<Integer, String, ?> state2 = s.restoreState(b, IntSerializer.INSTANCE,
+		HdfsKvState<Integer, String> state2 = (HdfsKvState<Integer, String>) s.restoreState(b, IntSerializer.INSTANCE,
 				StringSerializer.INSTANCE, "", Thread.currentThread().getContextClassLoader(), 1500);
 
 		assertEquals("-a", get(state2, 1));
@@ -130,6 +162,28 @@ public class HdfsStateTest {
 		assertEquals("-d", get(state2, 4));
 		assertEquals("e", get(state2, 5));
 		assertEquals("f", get(state2, 6));
+
+		put(state2, 1, "a");
+		put(state2, 3, "cc");
+		put(state2, 4, "dd");
+		put(state2, 1, null);
+
+		assertEquals("", get(state2, 1));
+		assertEquals("cc", get(state2, 3));
+		assertEquals("dd", get(state2, 4));
+
+		state2.snapshot(1600, 1600);
+		Thread.sleep(100);
+
+		get(state2, 5);
+		get(state2, 6);
+		get(state2, 7);
+
+		assertEquals("", get(state2, 1));
+		assertEquals("cc", get(state2, 3));
+		assertEquals("dd", get(state2, 4));
+
+		state2.dispose();
 
 	}
 
@@ -149,43 +203,57 @@ public class HdfsStateTest {
 
 	public void testMerge(CheckpointerFactory cf) throws IllegalArgumentException, Exception {
 
-		Random rnd = new Random();
-
 		IntSerializer is = IntSerializer.INSTANCE;
 		FileSystem fs = FileSystem.get(new Configuration());
 		HdfsKvStateConfig conf = new HdfsKvStateConfig(111, 1);
 		conf.setCheckpointerFactory(cf);
-		String cpDir = "/Users/gyulafora/Test/" + rnd.nextInt() + "/";
-		try (KeyScanner scanner = new KeyScanner(fs, new Path(cpDir), new HashMap<Interval, Path>(),
+		Path cpDir = new Path(TEMP_DIR_PATH, String.valueOf(rnd.nextLong()));
+		dirsToRemove.add(cpDir);
+		try (HdfsCheckpointManager scanner = new HdfsCheckpointManager(fs, cpDir,
+				new HashMap<Interval, Path>(),
 				conf)) {
 			Map<Integer, Optional<Integer>> kv = new HashMap<>();
 			kv.put(0, Optional.of(0));
 			kv.put(1, Optional.of(1));
 
-			try (CheckpointWriter w = cf.createWriter(fs, new Path(cpDir + "1"), conf)) {
+			try (CheckpointWriter w = cf.createWriter(fs, new Path(cpDir + "cp_1"), conf)) {
 				w.writeUnsorted(kv.entrySet(), is, is);
 			}
 
-			scanner.addNewLookupFile(1, new Path(cpDir + "1"));
+			scanner.addNewLookupFile(Interval.point(1), new Path(cpDir + "cp_1"));
 
 			kv.clear();
 			kv.put(1, Optional.of(2));
 
-			try (CheckpointWriter w = cf.createWriter(fs, new Path(cpDir + "2"), conf)) {
+			try (CheckpointWriter w = cf.createWriter(fs, new Path(cpDir + "cp_2"), conf)) {
 				w.writeUnsorted(kv.entrySet(), is, is);
 			}
 
-			scanner.addNewLookupFile(2, new Path(cpDir + "2"));
+			scanner.addNewLookupFile(Interval.point(2), new Path(cpDir + "cp_2"));
 
-			assertEquals(Optional.of(0), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 0), is));
-			assertEquals(Optional.of(2), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 1), is));
+			assertEquals(Optional.of(0), scanner.lookupKey(InstantiationUtil.serializeToByteArray(is, 0), is));
+			assertEquals(Optional.of(2), scanner.lookupKey(InstantiationUtil.serializeToByteArray(is, 1), is));
 
 			scanner.merge(1, 2);
 
-			assertEquals(Optional.of(0), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 0), is));
-			assertEquals(Optional.of(2), scanner.lookup(InstantiationUtil.serializeToByteArray(is, 1), is));
+			assertEquals(Optional.of(0), scanner.lookupKey(InstantiationUtil.serializeToByteArray(is, 0), is));
+			assertEquals(Optional.of(2), scanner.lookupKey(InstantiationUtil.serializeToByteArray(is, 1), is));
 
-			assertTrue(fs.exists(new Path(cpDir + "merged_1_2")));
+			assertTrue(fs.exists(new Path(cpDir, "merged_1_2")));
+
+			// TODO: Add more tests here
+		}
+
+		Map<Interval, Path> ipMap = new HashMap<>();
+		ipMap.put(Interval.point(1), new Path(cpDir + "cp_1"));
+		ipMap.put(Interval.point(2), new Path(cpDir + "cp_2"));
+
+		fs.delete(new Path(cpDir + "cp_1"), true);
+
+		try (HdfsCheckpointManager scanner = new HdfsCheckpointManager(fs, cpDir, ipMap,
+				conf)) {
+			assertEquals(Optional.of(0), scanner.lookupKey(InstantiationUtil.serializeToByteArray(is, 0), is));
+			assertEquals(Optional.of(2), scanner.lookupKey(InstantiationUtil.serializeToByteArray(is, 1), is));
 		}
 	}
 

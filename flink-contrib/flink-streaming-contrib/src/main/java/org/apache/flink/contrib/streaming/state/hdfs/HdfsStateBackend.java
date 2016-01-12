@@ -22,7 +22,7 @@ import java.io.IOException;
 import java.util.HashMap;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.contrib.streaming.state.hdfs.KeyScanner.Interval;
+import org.apache.flink.contrib.streaming.state.hdfs.HdfsCheckpointManager.Interval;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
