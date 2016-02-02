@@ -23,6 +23,7 @@ import org.apache.flink.core.fs.FSDataOutputStream;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.runtime.state.StreamStateHandle;
@@ -265,7 +266,7 @@ public class FsStateBackend extends StateBackend<FsStateBackend> {
 
 	@Override
 	public void initializeForJob(Environment env) throws Exception {
-		Path dir = new Path(basePath, env.getJobID().toString());
+		Path dir = new Path(basePath, env.getApplicationID().toString());
 
 		LOG.info("Initializing file state backend to URI " + dir);
 
@@ -298,7 +299,7 @@ public class FsStateBackend extends StateBackend<FsStateBackend> {
 	// ------------------------------------------------------------------------
 
 	@Override
-	public <K, V> FsHeapKvState<K, V> createKvState(String stateId, String stateName,
+	public <K, V> KvState<K, V, FsStateBackend> createKvState(String stateId, String stateName,
 			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception {
 		return new FsHeapKvState<K, V>(keySerializer, valueSerializer, defaultValue, this);
 	}

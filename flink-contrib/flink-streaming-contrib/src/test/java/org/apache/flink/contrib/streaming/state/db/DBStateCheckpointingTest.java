@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.contrib.streaming.state;
+package org.apache.flink.contrib.streaming.state.db;
 
 import static org.junit.Assert.assertEquals;
 
@@ -37,6 +37,7 @@ import org.apache.flink.api.common.state.OperatorState;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.contrib.streaming.state.CompactionStrategy;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -52,8 +53,8 @@ import org.junit.Before;
 @SuppressWarnings("serial")
 public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
 
-	final long NUM_STRINGS = 1_000_000L;
-	final static int NUM_KEYS = 100;
+	final static int NUM_KEYS = 500;
+	final static long NUM_STRINGS = 10000 * NUM_KEYS;
 	private static NetworkServerControl server;
 	private static File tempDir;
 
@@ -84,9 +85,11 @@ public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
 		DbBackendConfig conf = new DbBackendConfig("flink", "flink",
 				"jdbc:derby://localhost:1526/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true");
 		conf.setDbAdapter(new DerbyAdapter());
-		conf.setKvStateCompactionFrequency(2);
+		conf.setCompactionStrategy(new CompactionStrategy(2, true));
+		conf.setKvCacheSize(100);
+		conf.setMaxKvCacheEvictFraction(1);
+		conf.enableBloomFilter(1000, 0.01);
 
-		// We store the non-partitioned states (source offset) in-memory
 		DbStateBackend backend = new DbStateBackend(conf, new MemoryStateBackend());
 
 		env.setStateBackend(backend);
@@ -158,7 +161,7 @@ public class DBStateCheckpointingTest extends StreamFaultToleranceTestBase {
 					ctx.collect(index % NUM_KEYS);
 				}
 
-				if (rnd.nextDouble() < 0.008) {
+				if (rnd.nextDouble() < 0.02) {
 					Thread.sleep(1);
 				}
 			}

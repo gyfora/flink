@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package org.apache.flink.contrib.streaming.state;
+package org.apache.flink.contrib.streaming.state.db;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -44,6 +44,8 @@ import org.apache.derby.drda.NetworkServerControl;
 import org.apache.flink.api.common.typeutils.base.IntSerializer;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.contrib.streaming.state.CompactionStrategy;
+import org.apache.flink.contrib.streaming.state.OutOfCoreKvState.InMemoryStateCache;
 import org.apache.flink.core.testutils.CommonTestUtils;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
@@ -51,12 +53,12 @@ import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
-import com.google.common.collect.Lists;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.google.common.base.Optional;
+import com.google.common.collect.Lists;
 
 public class DbStateBackendTest {
 
@@ -78,7 +80,7 @@ public class DbStateBackendTest {
 		conf = new DbBackendConfig("flink", "flink",
 				"jdbc:derby://localhost:1527/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true");
 		conf.setDbAdapter(new DerbyAdapter());
-		conf.setKvStateCompactionFrequency(1);
+		conf.setCompactionStrategy(new CompactionStrategy(1, true));
 
 		url1 = "jdbc:derby://localhost:1527/" + tempDir.getAbsolutePath() + "/flinkDB1;create=true";
 		url2 = "jdbc:derby://localhost:1527/" + tempDir.getAbsolutePath() + "/flinkDB2;create=true";
@@ -133,11 +135,13 @@ public class DbStateBackendTest {
 
 		assertNotNull(backend.getConnections());
 		assertTrue(
-				isTableCreated(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+				isTableCreated(backend.getConnections().getFirst(),
+						"checkpoints_" + env.getApplicationID().toShortString()));
 
 		backend.disposeAllStateForCurrentJob();
 		assertFalse(
-				isTableCreated(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+				isTableCreated(backend.getConnections().getFirst(),
+						"checkpoints_" + env.getApplicationID().toShortString()));
 		backend.close();
 
 		assertTrue(backend.getConnections().getFirst().isClosed());
@@ -167,12 +171,14 @@ public class DbStateBackendTest {
 		assertEquals(state2, handle2.getState(getClass().getClassLoader()));
 		handle2.discardState();
 
-		assertFalse(isTableEmpty(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+		assertFalse(isTableEmpty(backend.getConnections().getFirst(),
+				"checkpoints_" + env.getApplicationID().toShortString()));
 
 		assertEquals(state3, handle3.getState(getClass().getClassLoader()));
 		handle3.discardState();
 
-		assertTrue(isTableEmpty(backend.getConnections().getFirst(), "checkpoints_" + env.getApplicationID().toShortString()));
+		assertTrue(isTableEmpty(backend.getConnections().getFirst(),
+				"checkpoints_" + env.getApplicationID().toShortString()));
 
 		backend.close();
 
@@ -259,7 +265,7 @@ public class DbStateBackendTest {
 	public void testCompaction() throws Exception {
 		DbBackendConfig conf = new DbBackendConfig("flink", "flink", url1);
 		MockAdapter adapter = new MockAdapter();
-		conf.setKvStateCompactionFrequency(2);
+		conf.setCompactionStrategy(new CompactionStrategy(2, true));
 		conf.setDbAdapter(adapter);
 
 		DbStateBackend backend1 = new DbStateBackend(conf);
@@ -299,7 +305,6 @@ public class DbStateBackendTest {
 		// Wait until the compaction completes
 		s1.getExecutor().awaitTermination(5, TimeUnit.SECONDS);
 		assertEquals(2, adapter.numCompcations.get());
-		assertEquals(5, adapter.keptAlive);
 
 		backend1.close();
 		backend2.close();
@@ -318,7 +323,7 @@ public class DbStateBackendTest {
 		conf.setMaxKvInsertBatchSize(2);
 
 		// We evict 2 elements when the cache is full
-		conf.setMaxKvCacheEvictFraction(0.6f);
+		conf.setMaxKvCacheEvictFraction(0.6);
 
 		DbStateBackend backend = new DbStateBackend(conf);
 
@@ -336,8 +341,8 @@ public class DbStateBackendTest {
 		assertTrue(isTableCreated(DriverManager.getConnection(url1, "flink", "flink"), tableName));
 		assertTrue(isTableCreated(DriverManager.getConnection(url2, "flink", "flink"), tableName));
 
-		Map<Integer, Optional<String>> cache = kv.getStateCache();
-		Map<Integer, Optional<String>> modified = kv.getModified();
+		InMemoryStateCache<Integer, String> cache = kv.getCache();
+		Map<Integer, Optional<String>> modified = cache.getModified();
 
 		assertEquals(0, kv.size());
 
@@ -413,10 +418,6 @@ public class DbStateBackendTest {
 		kv.setCurrentKey(7);
 		kv.value();
 
-		assertFalse(modified.containsKey(5));
-		assertTrue(modified.containsKey(6));
-		assertTrue(modified.containsKey(7));
-
 		assertFalse(cache.containsKey(1));
 		assertFalse(cache.containsKey(2));
 		assertFalse(cache.containsKey(3));
@@ -489,16 +490,10 @@ public class DbStateBackendTest {
 
 		private static final long serialVersionUID = 1L;
 		public AtomicInteger numCompcations = new AtomicInteger(0);
-		public int keptAlive = 0;
 
 		@Override
 		public void compactKvStates(String kvStateId, Connection con, long lowerTs, long upperTs) throws SQLException {
 			numCompcations.incrementAndGet();
-		}
-
-		@Override
-		public void keepAlive(Connection con) throws SQLException {
-			keptAlive++;
 		}
 	}
 
