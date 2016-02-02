@@ -731,6 +731,7 @@ class JobManager(
           case (_, (eg, _)) =>
             new JobStatusMessage(
               eg.getJobID,
+              eg.getApplicationID,
               eg.getJobName,
               eg.getState,
               eg.getStatusTimestamp(JobStatus.CREATED)
