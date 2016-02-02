@@ -29,6 +29,11 @@ import org.apache.flink.core.fs.FSDataOutputStream;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.execution.Environment;
+<<<<<<< HEAD
+=======
+import org.apache.flink.runtime.state.KvState;
+import org.apache.flink.runtime.state.StateBackend;
+>>>>>>> 9d987e6... Db backend modifications
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 
@@ -270,12 +275,17 @@ public class FsStateBackend extends AbstractStateBackend {
 	// ------------------------------------------------------------------------
 
 	@Override
+<<<<<<< HEAD
 	public void initializeForJob(Environment env,
 		String operatorIdentifier,
 		TypeSerializer<?> keySerializer) throws Exception {
 		super.initializeForJob(env, operatorIdentifier, keySerializer);
 
 		Path dir = new Path(basePath, env.getJobID().toString());
+=======
+	public void initializeForJob(Environment env) throws Exception {
+		Path dir = new Path(basePath, env.getApplicationID().toString());
+>>>>>>> 9d987e6... Db backend modifications
 
 		LOG.info("Initializing file state backend to URI " + dir);
 
@@ -308,6 +318,7 @@ public class FsStateBackend extends AbstractStateBackend {
 	// ------------------------------------------------------------------------
 
 	@Override
+<<<<<<< HEAD
 	public <N, V> ValueState<V> createValueState(TypeSerializer<N> namespaceSerializer, ValueStateDescriptor<V> stateDesc) throws Exception {
 		return new FsValueState<>(this, keySerializer, namespaceSerializer, stateDesc);
 	}
@@ -315,6 +326,11 @@ public class FsStateBackend extends AbstractStateBackend {
 	@Override
 	public <N, T> ListState<T> createListState(TypeSerializer<N> namespaceSerializer, ListStateDescriptor<T> stateDesc) throws Exception {
 		return new FsListState<>(this, keySerializer, namespaceSerializer, stateDesc);
+=======
+	public <K, V> KvState<K, V, FsStateBackend> createKvState(String stateId, String stateName,
+			TypeSerializer<K> keySerializer, TypeSerializer<V> valueSerializer, V defaultValue) throws Exception {
+		return new FsHeapKvState<K, V>(keySerializer, valueSerializer, defaultValue, this);
+>>>>>>> 9d987e6... Db backend modifications
 	}
 
 	@Override

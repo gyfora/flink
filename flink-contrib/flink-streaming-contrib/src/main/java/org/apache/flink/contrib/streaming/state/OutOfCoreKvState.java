@@ -32,7 +32,6 @@ import java.util.Map.Entry;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-import org.apache.flink.api.common.state.StateDescriptor;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -52,7 +51,7 @@ import com.google.common.base.Optional;
 import com.google.common.hash.BloomFilter;
 
 public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
-		implements KvState<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S>, ValueState<V>,
+		implements KvState<K, N, ValueState<V>, ValueStateDescriptor<V>, S>, ValueState<V>,
 		CheckpointListener {
 
 	private static final Logger LOG = LoggerFactory.getLogger(OutOfCoreKvState.class);
@@ -174,7 +173,7 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 	}
 
 	@Override
-	public KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> snapshot(long checkpointId,
+	public KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> snapshot(long checkpointId,
 			long timestamp)
 					throws Exception {
 
@@ -203,12 +202,12 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 
 		// Create a snapshot that will be used to restore this state
 		LOG.debug("Snapshotting modified states for {}...", stateId);
-		KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> snapshot = snapshotStates(
+		KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> snapshot = snapshotStates(
 				cache.modified.entrySet(), checkpointId,
 				timestamp);
 		LOG.debug("Modified states succesfully checkpointed for {}...", stateId);
 
-		KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> wrappedSnapshot = new SnapshotWrapper<>(
+		KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> wrappedSnapshot = new SnapshotWrapper<>(
 				snapshot, filterCheckpoint,
 				completedCheckpoints);
 
@@ -230,13 +229,13 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 	}
 
 	private static class SnapshotWrapper<K, N, V, S extends AbstractStateBackend>
-			implements KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> {
+			implements KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> {
 		private static final long serialVersionUID = 1L;
-		private final KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> wrapped;
+		private final KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> wrapped;
 		private final StreamStateHandle filterCheckpoint;
 		private final Map<Long, Long> completedCheckpoints;
 
-		public SnapshotWrapper(KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> wrapped,
+		public SnapshotWrapper(KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> wrapped,
 				StreamStateHandle filterCheckpoint,
 				Map<Long, Long> completedCheckpoints) {
 			this.wrapped = wrapped;
@@ -245,7 +244,7 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 		}
 
 		@Override
-		public KvState<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> restoreState(S stateBackend,
+		public KvState<K, N, ValueState<V>, ValueStateDescriptor<V>, S> restoreState(S stateBackend,
 				TypeSerializer<K> keySerializer, ClassLoader classLoader, long recoveryTimestamp) throws Exception {
 			OutOfCoreKvState<K, N, V, S> restored = (OutOfCoreKvState<K, N, V, S>) wrapped.restoreState(stateBackend,
 					keySerializer, classLoader, recoveryTimestamp);
@@ -297,7 +296,7 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 	 * @return The current {@link KvStateSnapshot}
 	 * 
 	 */
-	public abstract KvStateSnapshot<K, N, ValueState<V>, StateDescriptor<ValueState<V>, V>, S> snapshotStates(
+	public abstract KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> snapshotStates(
 			Collection<Entry<Tuple2<K, N>, Optional<V>>> modifiedKVs,
 			long checkpointId, long timestamp) throws IOException;
 
