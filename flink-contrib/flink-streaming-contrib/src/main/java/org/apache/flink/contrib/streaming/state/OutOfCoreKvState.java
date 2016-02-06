@@ -228,7 +228,7 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 		return wrappedSnapshot;
 	}
 
-	private static class SnapshotWrapper<K, N, V, S extends AbstractStateBackend>
+	public static class SnapshotWrapper<K, N, V, S extends AbstractStateBackend>
 			implements KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> {
 		private static final long serialVersionUID = 1L;
 		private final KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, S> wrapped;
