@@ -17,8 +17,6 @@
 
 package org.apache.flink.contrib.streaming.state;
 
-import org.apache.flink.contrib.streaming.state.db.LazyDbKvState;
-
 import com.google.common.hash.Funnel;
 import com.google.common.hash.PrimitiveSink;
 
