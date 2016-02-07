@@ -33,17 +33,23 @@ public class PerformanceLogger implements Serializable {
 	private long totalTime = 0;
 	private int count = 0;
 
-	private final boolean debug;
+	private final boolean enabled;
+	private final boolean info;
 
-	public PerformanceLogger(int frequency, String message, Logger LOG) {
+	public PerformanceLogger(int frequency, String message, Logger LOG, boolean info) {
 		this.frequency = frequency;
 		this.LOG = LOG;
 		this.message = "Performance log (" + message + ") (numOperations, totalTime) = ({}, {})";
-		this.debug = LOG.isDebugEnabled();
+		this.enabled = info ? LOG.isInfoEnabled() : LOG.isDebugEnabled();
+		this.info = info;
+	}
+
+	public PerformanceLogger(int frequency, String message, Logger LOG) {
+		this(frequency, message, LOG, false);
 	}
 
 	public void startMeasurement() {
-		if (debug) {
+		if (enabled) {
 			if (startTime > 0) {
 				throw new RuntimeException("Started twice in a row");
 			}
@@ -52,7 +58,7 @@ public class PerformanceLogger implements Serializable {
 	}
 
 	public void stopMeasurement() {
-		if (debug) {
+		if (enabled) {
 			if (startTime < 0) {
 				throw new RuntimeException("Start first");
 			}
@@ -61,7 +67,11 @@ public class PerformanceLogger implements Serializable {
 			startTime = -1;
 
 			if (count > 0 && count % frequency == 0) {
-				LOG.debug(message, frequency, totalTime / 1000000);
+				if (info) {
+					LOG.info(message, frequency, totalTime / 1000000);
+				} else {
+					LOG.debug(message, frequency, totalTime / 1000000);
+				}
 				totalTime = 0;
 				count = 0;
 			}

@@ -55,6 +55,7 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
@@ -106,7 +107,7 @@ public class EventTimeWindowCheckpointingITCase extends TestLogger {
 	}
 
 	@Before
-	public void initStateBackend() throws IOException {
+	public void initStateBackend() throws IOException, URISyntaxException {
 		switch (stateBackendEnum) {
 			case MEM:
 				this.stateBackend = new MemoryStateBackend();

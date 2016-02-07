@@ -17,8 +17,12 @@
 
 package org.apache.flink.contrib.streaming.state;
 
+import static java.util.Objects.requireNonNull;
+
 import java.io.File;
 import java.io.Serializable;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.state.ListState;
@@ -32,8 +36,6 @@ import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.StateHandle;
 
-import static java.util.Objects.requireNonNull;
-
 /**
  *
  */
@@ -41,10 +43,10 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 	private static final long serialVersionUID = 1L;
 
 	/** Base path for RocksDB directory. */
-	private final String dbBasePath;
+	private final URI dbBasePath;
 
 	/** The checkpoint directory that we snapshot RocksDB backups to. */
-	private final String checkpointDirectory;
+	private final URI checkpointDirectory;
 
 	/** Operator identifier that is used to uniqueify the RocksDB storage path. */
 	private String operatorIdentifier;
@@ -54,9 +56,10 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 
 	private AbstractStateBackend backingStateBackend;
 
-	public RocksDBStateBackend(String dbBasePath, String checkpointDirectory, AbstractStateBackend backingStateBackend) {
-		this.dbBasePath = requireNonNull(dbBasePath);
-		this.checkpointDirectory = requireNonNull(checkpointDirectory);
+	public RocksDBStateBackend(String dbBasePath, String checkpointDirectory, AbstractStateBackend backingStateBackend)
+			throws URISyntaxException {
+		this.dbBasePath = new URI(requireNonNull(dbBasePath));
+		this.checkpointDirectory = new URI(requireNonNull(checkpointDirectory));
 		this.backingStateBackend = requireNonNull(backingStateBackend);
 	}
 
