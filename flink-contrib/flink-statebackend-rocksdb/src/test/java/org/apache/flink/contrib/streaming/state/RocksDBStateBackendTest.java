@@ -25,6 +25,7 @@ import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.util.UUID;
 
 /**
@@ -36,11 +37,11 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 	private File chkDir;
 
 	@Override
-	protected RocksDBStateBackend getStateBackend() throws IOException {
+	protected RocksDBStateBackend getStateBackend() throws IOException, URISyntaxException {
 		dbDir = new File(ConfigConstants.DEFAULT_TASK_MANAGER_TMP_PATH, UUID.randomUUID().toString());
 		chkDir = new File(ConfigConstants.DEFAULT_TASK_MANAGER_TMP_PATH, UUID.randomUUID().toString());
 
-		return new RocksDBStateBackend(dbDir.getAbsolutePath(), "file://" + chkDir.getAbsolutePath(), new MemoryStateBackend());
+		return new RocksDBStateBackend("file://" + dbDir.getAbsolutePath(), "file://" + chkDir.getAbsolutePath(), new MemoryStateBackend());
 	}
 
 	@Override

@@ -17,18 +17,23 @@
  */
 package org.apache.flink.contrib.streaming.state;
 
+import static java.util.Objects.requireNonNull;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.flink.api.common.state.State;
 import org.apache.flink.api.common.state.StateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
-import org.apache.flink.util.HDFSCopyFromLocal;
-import org.apache.flink.util.HDFSCopyToLocal;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.rocksdb.BackupEngine;
@@ -41,13 +46,6 @@ import org.rocksdb.RocksDBException;
 import org.rocksdb.StringAppendOperator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
-import java.net.URI;
-
-import static java.util.Objects.requireNonNull;
 
 /**
  * Base class for {@link State} implementations that store state in a RocksDB database.
@@ -232,15 +230,17 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 			try (BackupEngine backupEngine = BackupEngine.open(Env.getDefault(), new BackupableDBOptions(localBackupPath.getAbsolutePath()))) {
 				backupEngine.createNewBackup(db);
 			}
-
-			HDFSCopyFromLocal.copyFromLocal(localBackupPath, backupUri);
+			
+			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
+			fs.copyFromLocalFile(new Path(localBackupPath.getAbsolutePath()), new Path(backupUri));
+			
 			KvStateSnapshot<K, N, S, SD, Backend> result = createRocksDBSnapshot(backupUri, checkpointId);
 			success = true;
 			return result;
 		} finally {
 			FileUtils.deleteDirectory(localBackupPath);
 			if (!success) {
-				FileSystem fs = FileSystem.get(backupUri, new Configuration());
+				FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
 				fs.delete(new Path(backupUri), true);
 			}
 		}
@@ -338,7 +338,7 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 				}
 			}
 
-			FileSystem fs = FileSystem.get(backupUri, new Configuration());
+			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
 
 			final File localBackupPath = new File(dbPath, "chk-" + checkpointId);
 
@@ -351,19 +351,21 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 				}
 			}
 
-			HDFSCopyToLocal.copyToLocal(backupUri, dbPath);
+			fs.copyToLocalFile(new Path(backupUri), new Path(dbPath.getAbsolutePath()));
+
 			return createRocksDBState(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, localBackupPath.getAbsolutePath());
 		}
 
 		@Override
 		public final void discardState() throws Exception {
-			FileSystem fs = FileSystem.get(backupUri, new Configuration());
+			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
 			fs.delete(new Path(backupUri), true);
 		}
 
 		@Override
 		public final long getStateSize() throws Exception {
-			return 0;
+			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
+			return fs.getContentSummary(new Path(backupUri)).getLength();
 		}
 	}
 }

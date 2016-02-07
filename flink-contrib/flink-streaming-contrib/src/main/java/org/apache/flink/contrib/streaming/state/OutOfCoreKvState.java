@@ -36,7 +36,6 @@ import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.contrib.streaming.state.logging.PerformanceLogger;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.AbstractStateBackend.CheckpointStateOutputStream;
@@ -55,7 +54,6 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 		CheckpointListener {
 
 	private static final Logger LOG = LoggerFactory.getLogger(OutOfCoreKvState.class);
-	private final PerformanceLogger lookupLogger;
 
 	protected final String stateId;
 
@@ -101,8 +99,6 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 		this.valueSerializer = stateDesc.getSerializer();
 		this.defaultValue = stateDesc.getDefaultValue();
 		this.stateDesc = stateDesc;
-
-		this.lookupLogger = new PerformanceLogger(100000, stateId + " lookup", LOG);
 
 		this.cache = new InMemoryStateCache<>(conf.getKvCacheSize(), conf.getNumElementsToEvict(), this);
 
@@ -161,9 +157,7 @@ public abstract class OutOfCoreKvState<K, N, V, S extends AbstractStateBackend>
 			// We get the value from the cache (which will automatically load it
 			// from the database if necessary). If null, we return a copy of the
 			// default value
-			lookupLogger.startMeasurement();
 			V val = cache.get(Tuple2.of(currentKey, currentNamespace)).orNull();
-			lookupLogger.stopMeasurement();
 			return val != null ? val : copyDefault();
 		} catch (RuntimeException e) {
 			// We need to catch the RuntimeExceptions thrown in the StateCache
