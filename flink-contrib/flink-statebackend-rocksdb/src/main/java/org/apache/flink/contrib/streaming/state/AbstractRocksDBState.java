@@ -28,6 +28,7 @@ import org.apache.commons.io.FileUtils;
 import org.apache.flink.api.common.state.State;
 import org.apache.flink.api.common.state.StateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend.OptionsFactory;
 import org.apache.flink.core.memory.DataOutputView;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
@@ -85,6 +86,9 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 	/** Our RocksDB instance */
 	protected final RocksDB db;
 
+	protected OptionsFactory optionsFactory;
+	protected Options options;
+
 	/**
 	 * Creates a new RocksDB backed state.
 	 *
@@ -92,7 +96,9 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 	 * @param namespaceSerializer The serializer for the namespace.
 	 * @param dbPath The path on the local system where RocksDB data should be stored.
 	 */
-	protected AbstractRocksDBState(TypeSerializer<K> keySerializer,
+	protected AbstractRocksDBState(
+		OptionsFactory opts,
+		TypeSerializer<K> keySerializer,
 		TypeSerializer<N> namespaceSerializer,
 		File dbPath,
 		String checkpointPath) {
@@ -103,7 +109,8 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 
 		RocksDB.loadLibrary();
 
-		Options options = new Options().setCreateIfMissing(true);
+		this.optionsFactory = opts;
+		options = optionsFactory.getOptions().setCreateIfMissing(true);
 		options.setMergeOperator(new StringAppendOperator());
 
 		if (!dbPath.exists()) {
@@ -140,7 +147,9 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 	 * @param dbPath The path on the local system where RocksDB data should be stored.
 	 * @param restorePath The path to a backup directory from which to restore RocksDb database.
 	 */
-	protected AbstractRocksDBState(TypeSerializer<K> keySerializer,
+	protected AbstractRocksDBState(
+			OptionsFactory opts,
+		TypeSerializer<K> keySerializer,
 		TypeSerializer<N> namespaceSerializer,
 		File dbPath,
 		String checkpointPath,
@@ -160,7 +169,8 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		this.dbPath = dbPath;
 		this.checkpointPath = checkpointPath;
 
-		Options options = new Options().setCreateIfMissing(true);
+		this.optionsFactory = opts;
+		options = optionsFactory.getOptions().setCreateIfMissing(true);
 		options.setMergeOperator(new StringAppendOperator());
 
 		if (!dbPath.exists()) {
@@ -291,14 +301,19 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 
 		/** Hash of the StateDescriptor, for sanity checks */
 		protected final SD stateDesc;
+		
+		protected final OptionsFactory options;
 
-		public AbstractRocksDBSnapshot(File dbPath,
+		public AbstractRocksDBSnapshot(
+				OptionsFactory options,
+			File dbPath,
 			String checkpointPath,
 			URI backupUri,
 			long checkpointId,
 			TypeSerializer<K> keySerializer,
 			TypeSerializer<N> namespaceSerializer,
 			SD stateDesc) {
+			this.options = options;
 			this.dbPath = dbPath;
 			this.checkpointPath = checkpointPath;
 			this.backupUri = backupUri;
@@ -354,6 +369,10 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 			fs.copyToLocalFile(new Path(backupUri), new Path(dbPath.getAbsolutePath()));
 
 			return createRocksDBState(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, localBackupPath.getAbsolutePath());
+		}
+		
+		public OptionsFactory getOptions() {
+			return options;
 		}
 
 		@Override

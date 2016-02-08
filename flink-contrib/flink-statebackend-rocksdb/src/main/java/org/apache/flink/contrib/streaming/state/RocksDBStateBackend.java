@@ -35,6 +35,7 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.StateHandle;
+import org.rocksdb.Options;
 
 /**
  *
@@ -48,7 +49,9 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 	/** The checkpoint directory that we snapshot RocksDB backups to. */
 	private final URI checkpointDirectory;
 
-	/** Operator identifier that is used to uniqueify the RocksDB storage path. */
+	/**
+	 * Operator identifier that is used to uniqueify the RocksDB storage path.
+	 */
 	private String operatorIdentifier;
 
 	/** JobID for uniquifying backup paths. */
@@ -56,17 +59,26 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 
 	private AbstractStateBackend backingStateBackend;
 
+	private final OptionsFactory optionsFactory;
+
 	public RocksDBStateBackend(String dbBasePath, String checkpointDirectory, AbstractStateBackend backingStateBackend)
 			throws URISyntaxException {
+		this(dbBasePath, checkpointDirectory, backingStateBackend, new DefaultOptionsFactory());
+	}
+
+	public RocksDBStateBackend(String dbBasePath, String checkpointDirectory, AbstractStateBackend backingStateBackend,
+			OptionsFactory options)
+					throws URISyntaxException {
 		this.dbBasePath = new URI(requireNonNull(dbBasePath));
 		this.checkpointDirectory = new URI(requireNonNull(checkpointDirectory));
 		this.backingStateBackend = requireNonNull(backingStateBackend);
+		this.optionsFactory = options;
 	}
 
 	@Override
 	public void initializeForJob(Environment env,
-		String operatorIdentifier,
-		TypeSerializer<?> keySerializer) throws Exception {
+			String operatorIdentifier,
+			TypeSerializer<?> keySerializer) throws Exception {
 		super.initializeForJob(env, operatorIdentifier, keySerializer);
 		this.operatorIdentifier = operatorIdentifier.replace(" ", "");
 		backingStateBackend.initializeForJob(env, operatorIdentifier, keySerializer);
@@ -93,38 +105,56 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 
 	@Override
 	protected <N, T> ValueState<T> createValueState(TypeSerializer<N> namespaceSerializer,
-		ValueStateDescriptor<T> stateDesc) throws Exception {
+			ValueStateDescriptor<T> stateDesc) throws Exception {
 		File dbPath = getDbPath(stateDesc.getName());
 		String checkpointPath = getCheckpointPath(stateDesc.getName());
-		return new RocksDBValueState<>(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath);
+		return new RocksDBValueState<>(optionsFactory, keySerializer, namespaceSerializer, stateDesc, dbPath,
+				checkpointPath);
 	}
 
 	@Override
 	protected <N, T> ListState<T> createListState(TypeSerializer<N> namespaceSerializer,
-		ListStateDescriptor<T> stateDesc) throws Exception {
+			ListStateDescriptor<T> stateDesc) throws Exception {
 		File dbPath = getDbPath(stateDesc.getName());
 		String checkpointPath = getCheckpointPath(stateDesc.getName());
-		return new RocksDBListState<>(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath);
+		return new RocksDBListState<>(optionsFactory, keySerializer, namespaceSerializer, stateDesc, dbPath,
+				checkpointPath);
 	}
 
 	@Override
 	protected <N, T> ReducingState<T> createReducingState(TypeSerializer<N> namespaceSerializer,
-		ReducingStateDescriptor<T> stateDesc) throws Exception {
+			ReducingStateDescriptor<T> stateDesc) throws Exception {
 		File dbPath = getDbPath(stateDesc.getName());
 		String checkpointPath = getCheckpointPath(stateDesc.getName());
-		return new RocksDBReducingState<>(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath);
+		return new RocksDBReducingState<>(optionsFactory, keySerializer, namespaceSerializer, stateDesc, dbPath,
+				checkpointPath);
 	}
 
 	@Override
 	public CheckpointStateOutputStream createCheckpointStateOutputStream(long checkpointID,
-		long timestamp) throws Exception {
+			long timestamp) throws Exception {
 		return backingStateBackend.createCheckpointStateOutputStream(checkpointID, timestamp);
 	}
 
 	@Override
 	public <S extends Serializable> StateHandle<S> checkpointStateSerializable(S state,
-		long checkpointID,
-		long timestamp) throws Exception {
+			long checkpointID,
+			long timestamp) throws Exception {
 		return backingStateBackend.checkpointStateSerializable(state, checkpointID, timestamp);
+	}
+
+	public interface OptionsFactory extends Serializable {
+		Options getOptions();
+	}
+
+	private static class DefaultOptionsFactory implements OptionsFactory {
+
+		private static final long serialVersionUID = 1L;
+
+		@Override
+		public Options getOptions() {
+			return new Options();
+		}
+
 	}
 }

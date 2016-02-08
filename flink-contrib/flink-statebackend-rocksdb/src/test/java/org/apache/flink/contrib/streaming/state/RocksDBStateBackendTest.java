@@ -18,15 +18,15 @@
 
 package org.apache.flink.contrib.streaming.state;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.runtime.state.StateBackendTestBase;
-import org.apache.flink.runtime.state.memory.MemoryStateBackend;
-
 import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.util.UUID;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.runtime.state.StateBackendTestBase;
+import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 
 /**
  * Tests for the partitioned state part of {@link RocksDBStateBackend}.
@@ -41,7 +41,8 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		dbDir = new File(ConfigConstants.DEFAULT_TASK_MANAGER_TMP_PATH, UUID.randomUUID().toString());
 		chkDir = new File(ConfigConstants.DEFAULT_TASK_MANAGER_TMP_PATH, UUID.randomUUID().toString());
 
-		return new RocksDBStateBackend("file://" + dbDir.getAbsolutePath(), "file://" + chkDir.getAbsolutePath(), new MemoryStateBackend());
+		return new RocksDBStateBackend("file://" + dbDir.getAbsolutePath(), "file://" + chkDir.getAbsolutePath(),
+				new MemoryStateBackend());
 	}
 
 	@Override
@@ -49,6 +50,7 @@ public class RocksDBStateBackendTest extends StateBackendTestBase<RocksDBStateBa
 		try {
 			FileUtils.deleteDirectory(dbDir);
 			FileUtils.deleteDirectory(chkDir);
-		} catch (IOException ignore) {}
+		} catch (IOException ignore) {
+		}
 	}
 }

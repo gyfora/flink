@@ -17,15 +17,7 @@
  */
 package org.apache.flink.contrib.streaming.state;
 
-import org.apache.flink.api.common.state.ValueState;
-import org.apache.flink.api.common.state.ValueStateDescriptor;
-import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.core.memory.DataInputViewStreamWrapper;
-import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
-import org.apache.flink.runtime.state.AbstractStateBackend;
-import org.apache.flink.runtime.state.KvState;
-import org.apache.flink.runtime.state.KvStateSnapshot;
-import org.rocksdb.RocksDBException;
+import static java.util.Objects.requireNonNull;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -33,7 +25,16 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 
-import static java.util.Objects.requireNonNull;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend.OptionsFactory;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.apache.flink.runtime.state.AbstractStateBackend;
+import org.apache.flink.runtime.state.KvState;
+import org.apache.flink.runtime.state.KvStateSnapshot;
+import org.rocksdb.RocksDBException;
 
 /**
  * {@link ValueState} implementation that stores state in RocksDB.
@@ -62,23 +63,27 @@ public class RocksDBValueState<K, N, V, Backend extends AbstractStateBackend>
 	 *                           and can create a default state value.
 	 * @param dbPath The path on the local system where RocksDB data should be stored.
 	 */
-	protected RocksDBValueState(TypeSerializer<K> keySerializer,
+	protected RocksDBValueState(
+		OptionsFactory opts,
+		TypeSerializer<K> keySerializer,
 		TypeSerializer<N> namespaceSerializer,
 		ValueStateDescriptor<V> stateDesc,
 		File dbPath,
 		String backupPath) {
-		super(keySerializer, namespaceSerializer, dbPath, backupPath);
+		super(opts, keySerializer, namespaceSerializer, dbPath, backupPath);
 		this.stateDesc = requireNonNull(stateDesc);
 		this.valueSerializer = stateDesc.getSerializer();
 	}
 
-	protected RocksDBValueState(TypeSerializer<K> keySerializer,
+	protected RocksDBValueState(
+		OptionsFactory opts,
+		TypeSerializer<K> keySerializer,
 		TypeSerializer<N> namespaceSerializer,
 		ValueStateDescriptor<V> stateDesc,
 		File dbPath,
 		String backupPath,
 		String restorePath) {
-		super(keySerializer, namespaceSerializer, dbPath, backupPath, restorePath);
+		super(opts, keySerializer, namespaceSerializer, dbPath, backupPath, restorePath);
 		this.stateDesc = stateDesc;
 		this.valueSerializer = stateDesc.getSerializer();
 	}
@@ -119,20 +124,22 @@ public class RocksDBValueState<K, N, V, Backend extends AbstractStateBackend>
 	protected KvStateSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, Backend> createRocksDBSnapshot(
 		URI backupUri,
 		long checkpointId) {
-		return new Snapshot<>(dbPath, checkpointPath, backupUri, checkpointId, keySerializer, namespaceSerializer, stateDesc);
+		return new Snapshot<>(optionsFactory, dbPath, checkpointPath, backupUri, checkpointId, keySerializer, namespaceSerializer, stateDesc);
 	}
 
 	private static class Snapshot<K, N, V, Backend extends AbstractStateBackend> extends AbstractRocksDBSnapshot<K, N, ValueState<V>, ValueStateDescriptor<V>, Backend> {
 		private static final long serialVersionUID = 1L;
 
-		public Snapshot(File dbPath,
+		public Snapshot(OptionsFactory options,
+			File dbPath,
 			String checkpointPath,
 			URI backupUri,
 			long checkpointId,
 			TypeSerializer<K> keySerializer,
 			TypeSerializer<N> namespaceSerializer,
 			ValueStateDescriptor<V> stateDesc) {
-			super(dbPath,
+			super(options,
+				dbPath,
 				checkpointPath,
 				backupUri,
 				checkpointId,
@@ -149,7 +156,7 @@ public class RocksDBValueState<K, N, V, Backend extends AbstractStateBackend>
 			File dbPath,
 			String backupPath,
 			String restorePath) throws Exception {
-			return new RocksDBValueState<>(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, restorePath);
+			return new RocksDBValueState<>(getOptions(), keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, restorePath);
 		}
 	}
 }

@@ -17,6 +17,14 @@
  */
 package org.apache.flink.contrib.streaming.state;
 
+import static java.util.Objects.requireNonNull;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -39,20 +47,13 @@ import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.state.ReducingState;
 import org.apache.flink.api.common.state.ReducingStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend.OptionsFactory;
 import org.apache.flink.core.memory.DataInputViewStreamWrapper;
 import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
 import org.apache.flink.runtime.state.AbstractStateBackend;
 import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.rocksdb.RocksDBException;
-
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
-import java.net.URI;
-
-import static java.util.Objects.requireNonNull;
 
 /**
  * {@link ReducingState} implementation that stores state in RocksDB.
@@ -84,24 +85,28 @@ public class RocksDBReducingState<K, N, V, Backend extends AbstractStateBackend>
 	 *                           and can create a default state value.
 	 * @param dbPath The path on the local system where RocksDB data should be stored.
 	 */
-	protected RocksDBReducingState(TypeSerializer<K> keySerializer,
+	protected RocksDBReducingState(
+			OptionsFactory opts,
+		TypeSerializer<K> keySerializer,
 		TypeSerializer<N> namespaceSerializer,
 		ReducingStateDescriptor<V> stateDesc,
 		File dbPath,
 		String backupPath) {
-		super(keySerializer, namespaceSerializer, dbPath, backupPath);
+		super(opts, keySerializer, namespaceSerializer, dbPath, backupPath);
 		this.stateDesc = requireNonNull(stateDesc);
 		this.valueSerializer = stateDesc.getSerializer();
 		this.reduceFunction = stateDesc.getReduceFunction();
 	}
 
-	protected RocksDBReducingState(TypeSerializer<K> keySerializer,
+	protected RocksDBReducingState(
+			OptionsFactory opts,
+		TypeSerializer<K> keySerializer,
 		TypeSerializer<N> namespaceSerializer,
 		ReducingStateDescriptor<V> stateDesc,
 		File dbPath,
 		String backupPath,
 		String restorePath) {
-		super(keySerializer, namespaceSerializer, dbPath, backupPath, restorePath);
+		super(opts, keySerializer, namespaceSerializer, dbPath, backupPath, restorePath);
 		this.stateDesc = stateDesc;
 		this.valueSerializer = stateDesc.getSerializer();
 		this.reduceFunction = stateDesc.getReduceFunction();
@@ -153,20 +158,22 @@ public class RocksDBReducingState<K, N, V, Backend extends AbstractStateBackend>
 	protected KvStateSnapshot<K, N, ReducingState<V>, ReducingStateDescriptor<V>, Backend> createRocksDBSnapshot(
 		URI backupUri,
 		long checkpointId) {
-		return new Snapshot<>(dbPath, checkpointPath, backupUri, checkpointId, keySerializer, namespaceSerializer, stateDesc);
+		return new Snapshot<>(optionsFactory, dbPath, checkpointPath, backupUri, checkpointId, keySerializer, namespaceSerializer, stateDesc);
 	}
 
 	private static class Snapshot<K, N, V, Backend extends AbstractStateBackend> extends AbstractRocksDBSnapshot<K, N, ReducingState<V>, ReducingStateDescriptor<V>, Backend> {
 		private static final long serialVersionUID = 1L;
 
-		public Snapshot(File dbPath,
+		public Snapshot(
+				OptionsFactory options,
+			File dbPath,
 			String checkpointPath,
 			URI backupUri,
 			long checkpointId,
 			TypeSerializer<K> keySerializer,
 			TypeSerializer<N> namespaceSerializer,
 			ReducingStateDescriptor<V> stateDesc) {
-			super(dbPath,
+			super(options, dbPath,
 				checkpointPath,
 				backupUri,
 				checkpointId,
@@ -183,7 +190,7 @@ public class RocksDBReducingState<K, N, V, Backend extends AbstractStateBackend>
 			File dbPath,
 			String backupPath,
 			String restorePath) throws Exception {
-			return new RocksDBReducingState<>(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, restorePath);
+			return new RocksDBReducingState<>(getOptions(), keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, restorePath);
 		}
 	}
 }
