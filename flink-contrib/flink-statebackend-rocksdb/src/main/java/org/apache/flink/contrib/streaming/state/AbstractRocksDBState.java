@@ -35,30 +35,34 @@ import org.apache.flink.runtime.state.KvState;
 import org.apache.flink.runtime.state.KvStateSnapshot;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.rocksdb.BackupEngine;
-import org.rocksdb.BackupableDBOptions;
-import org.rocksdb.Env;
+import org.rocksdb.Checkpoint;
 import org.rocksdb.Options;
-import org.rocksdb.RestoreOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Base class for {@link State} implementations that store state in a RocksDB database.
+ * Base class for {@link State} implementations that store state in a RocksDB
+ * database.
  *
- * <p>This base class is responsible for setting up the RocksDB database, for
- * checkpointing/restoring the database and for disposal in the {@link #dispose()} method. The
- * concrete subclasses just use the RocksDB handle to store/retrieve state.
+ * <p>
+ * This base class is responsible for setting up the RocksDB database, for
+ * checkpointing/restoring the database and for disposal in the
+ * {@link #dispose()} method. The concrete subclasses just use the RocksDB
+ * handle to store/retrieve state.
  *
- * @param <K> The type of the key.
- * @param <N> The type of the namespace.
- * @param <S> The type of {@link State}.
- * @param <SD> The type of {@link StateDescriptor}.
+ * @param <K>
+ *            The type of the key.
+ * @param <N>
+ *            The type of the namespace.
+ * @param <S>
+ *            The type of {@link State}.
+ * @param <SD>
+ *            The type of {@link StateDescriptor}.
  */
 public abstract class AbstractRocksDBState<K, N, S extends State, SD extends StateDescriptor<S, ?>>
-	implements KvState<K, N, S, SD, RocksDBStateBackend>, State {
+		implements KvState<K, N, S, SD, RocksDBStateBackend>, State {
 
 	private static final Logger LOG = LoggerFactory.getLogger(AbstractRocksDBState.class);
 
@@ -85,16 +89,20 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 	/**
 	 * Creates a new RocksDB backed state.
 	 *
-	 * @param keySerializer The serializer for the keys.
-	 * @param namespaceSerializer The serializer for the namespace.
-	 * @param dbPath The path on the local system where RocksDB data should be stored.
+	 * @param keySerializer
+	 *            The serializer for the keys.
+	 * @param namespaceSerializer
+	 *            The serializer for the namespace.
+	 * @param dbPath
+	 *            The path on the local system where RocksDB data should be
+	 *            stored.
 	 */
 	protected AbstractRocksDBState(TypeSerializer<K> keySerializer,
 			TypeSerializer<N> namespaceSerializer,
 			File dbPath,
 			String checkpointPath,
 			Options options) {
-		
+
 		this.keySerializer = requireNonNull(keySerializer);
 		this.namespaceSerializer = namespaceSerializer;
 		this.dbPath = dbPath;
@@ -108,7 +116,8 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 			}
 		}
 
-		// clean it, this will remove the last part of the path but RocksDB will recreate it
+		// clean it, this will remove the last part of the path but RocksDB will
+		// recreate it
 		try {
 			File db = new File(dbPath, "db");
 			LOG.warn("Deleting already existing db directory {}.", db);
@@ -125,13 +134,19 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 	}
 
 	/**
-	 * Creates a new RocksDB backed state and restores from the given backup directory. After
-	 * restoring the backup directory is deleted.
+	 * Creates a new RocksDB backed state and restores from the given backup
+	 * directory. After restoring the backup directory is deleted.
 	 *
-	 * @param keySerializer The serializer for the keys.
-	 * @param namespaceSerializer The serializer for the namespace.
-	 * @param dbPath The path on the local system where RocksDB data should be stored.
-	 * @param restorePath The path to a backup directory from which to restore RocksDb database.
+	 * @param keySerializer
+	 *            The serializer for the keys.
+	 * @param namespaceSerializer
+	 *            The serializer for the namespace.
+	 * @param dbPath
+	 *            The path on the local system where RocksDB data should be
+	 *            stored.
+	 * @param restorePath
+	 *            The path to a backup directory from which to restore RocksDb
+	 *            database.
 	 */
 	protected AbstractRocksDBState(TypeSerializer<K> keySerializer,
 			TypeSerializer<N> namespaceSerializer,
@@ -141,13 +156,6 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 			Options options) {
 
 		RocksDB.loadLibrary();
-
-		try (BackupEngine backupEngine = BackupEngine.open(Env.getDefault(), new BackupableDBOptions(restorePath + "/"))) {
-			backupEngine.restoreDbFromLatestBackup(new File(dbPath, "db").getAbsolutePath(), new File(dbPath, "db").getAbsolutePath(), new RestoreOptions(true));
-			FileUtils.deleteDirectory(new File(restorePath));
-		} catch (RocksDBException|IOException|IllegalArgumentException e) {
-			throw new RuntimeException("Error while restoring RocksDB state from " + restorePath, e);
-		}
 
 		this.keySerializer = requireNonNull(keySerializer);
 		this.namespaceSerializer = namespaceSerializer;
@@ -161,7 +169,7 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		}
 
 		try {
-			db = RocksDB.open(options, new File(dbPath, "db").getAbsolutePath());
+			db = RocksDB.open(options, restorePath);
 		} catch (RocksDBException e) {
 			throw new RuntimeException("Error while opening RocksDB instance.", e);
 		}
@@ -177,15 +185,23 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 			writeKeyAndNamespace(out);
 			byte[] key = baos.toByteArray();
 			db.remove(key);
-		} catch (IOException|RocksDBException e) {
+		} catch (IOException | RocksDBException e) {
 			throw new RuntimeException("Error while removing entry from RocksDB", e);
 		}
 	}
+
+	int c = 0;
 
 	protected void writeKeyAndNamespace(DataOutputView out) throws IOException {
 		keySerializer.serialize(currentKey, out);
 		out.writeByte(42);
 		namespaceSerializer.serialize(currentNamespace, out);
+
+		// For debugging
+		if (c++ == 500000) {
+			c = 0;
+			logDbStats();
+		}
 	}
 
 	@Override
@@ -200,27 +216,40 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 
 	protected abstract AbstractRocksDBSnapshot<K, N, S, SD> createRocksDBSnapshot(URI backupUri, long checkpointId);
 
+	private void logDbStats() {
+		try {
+			LOG.info("RocksDB stats: {}", db.getProperty("rocksdb.stats"));
+			LOG.info("RocksDB index: {}", db.getProperty("rocksdb.estimate-table-readers-mem"));
+			LOG.info("RocksDB memtamble size: {}", db.getProperty("rocksdb.cur-size-all-mem-tables"));
+			LOG.info(db.getProperty("rocksdb.num-entries-active-mem-table"));
+			LOG.info(db.getProperty("rocksdb.num-entries-imm-mem-tables"));
+			LOG.info(db.getProperty("rocksdb.estimate-num-keys"));
+		} catch (Exception e) {
+		}
+	}
+
 	@Override
 	public final AbstractRocksDBSnapshot<K, N, S, SD> snapshot(long checkpointId, long timestamp) throws Exception {
+
+		logDbStats();
+
 		boolean success = false;
 
 		final File localBackupPath = new File(dbPath, "backup-" + checkpointId);
 		final URI backupUri = new URI(checkpointPath + "/chk-" + checkpointId);
 
 		try {
-			if (!localBackupPath.exists()) {
-				if (!localBackupPath.mkdirs()) {
-					throw new RuntimeException("Could not create local backup path " + localBackupPath);
-				}
+			if (localBackupPath.exists()) {
+				FileUtils.deleteDirectory(localBackupPath);
 			}
 
-			try (BackupEngine backupEngine = BackupEngine.open(Env.getDefault(), new BackupableDBOptions(localBackupPath.getAbsolutePath()))) {
-				backupEngine.createNewBackup(db);
-			}
-			
+			Checkpoint checkpoint = Checkpoint.create(db);
+			checkpoint.createCheckpoint(localBackupPath.getAbsolutePath());
+			checkpoint.dispose();
+
 			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
 			fs.copyFromLocalFile(new Path(localBackupPath.getAbsolutePath()), new Path(backupUri));
-			
+
 			AbstractRocksDBSnapshot<K, N, S, SD> result = createRocksDBSnapshot(backupUri, checkpointId);
 			success = true;
 			return result;
@@ -244,14 +273,13 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 	}
 
 	public static abstract class AbstractRocksDBSnapshot<K, N, S extends State, SD extends StateDescriptor<S, ?>>
-			implements KvStateSnapshot<K, N, S, SD, RocksDBStateBackend>
-	{
+			implements KvStateSnapshot<K, N, S, SD, RocksDBStateBackend> {
 		private static final long serialVersionUID = 1L;
 
 		private static final Logger LOG = LoggerFactory.getLogger(AbstractRocksDBSnapshot.class);
 
 		// ------------------------------------------------------------------------
-		//  Ctor parameters for RocksDB state
+		// Ctor parameters for RocksDB state
 		// ------------------------------------------------------------------------
 
 		/** Store it so that we can clean up in dispose() */
@@ -261,7 +289,7 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		protected final String checkpointPath;
 
 		// ------------------------------------------------------------------------
-		//  Info about this checkpoint
+		// Info about this checkpoint
 		// ------------------------------------------------------------------------
 
 		protected final URI backupUri;
@@ -269,7 +297,7 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		protected long checkpointId;
 
 		// ------------------------------------------------------------------------
-		//  For sanity checks
+		// For sanity checks
 		// ------------------------------------------------------------------------
 
 		/** Key serializer */
@@ -288,7 +316,7 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 				TypeSerializer<K> keySerializer,
 				TypeSerializer<N> namespaceSerializer,
 				SD stateDesc) {
-			
+
 			this.dbPath = dbPath;
 			this.checkpointPath = checkpointPath;
 			this.backupUri = backupUri;
@@ -318,10 +346,10 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 			// validity checks
 			if (!this.keySerializer.equals(keySerializer)) {
 				throw new IllegalArgumentException(
-					"Cannot restore the state from the snapshot with the given serializers. " +
-						"State (K/V) was serialized with " +
-						"(" + keySerializer + ") " +
-						"now is (" + keySerializer + ")");
+						"Cannot restore the state from the snapshot with the given serializers. " +
+								"State (K/V) was serialized with " +
+								"(" + keySerializer + ") " +
+								"now is (" + keySerializer + ")");
 			}
 
 			if (!dbPath.exists()) {
@@ -345,7 +373,8 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 
 			fs.copyToLocalFile(new Path(backupUri), new Path(dbPath.getAbsolutePath()));
 
-			return createRocksDBState(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath, localBackupPath.getAbsolutePath(), stateBackend.getRocksDBOptions());
+			return createRocksDBState(keySerializer, namespaceSerializer, stateDesc, dbPath, checkpointPath,
+					localBackupPath.getAbsolutePath(), stateBackend.getRocksDBOptions());
 		}
 
 		@Override
@@ -361,4 +390,3 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		}
 	}
 }
-
