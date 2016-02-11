@@ -196,12 +196,6 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		keySerializer.serialize(currentKey, out);
 		out.writeByte(42);
 		namespaceSerializer.serialize(currentNamespace, out);
-
-		// For debugging
-		if (c++ == 500000) {
-			c = 0;
-			logDbStats();
-		}
 	}
 
 	@Override
@@ -216,22 +210,8 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 
 	protected abstract AbstractRocksDBSnapshot<K, N, S, SD> createRocksDBSnapshot(URI backupUri, long checkpointId);
 
-	private void logDbStats() {
-		try {
-			LOG.info("RocksDB stats: {}", db.getProperty("rocksdb.stats"));
-			LOG.info("RocksDB index: {}", db.getProperty("rocksdb.estimate-table-readers-mem"));
-			LOG.info("RocksDB memtamble size: {}", db.getProperty("rocksdb.cur-size-all-mem-tables"));
-			LOG.info(db.getProperty("rocksdb.num-entries-active-mem-table"));
-			LOG.info(db.getProperty("rocksdb.num-entries-imm-mem-tables"));
-			LOG.info(db.getProperty("rocksdb.estimate-num-keys"));
-		} catch (Exception e) {
-		}
-	}
-
 	@Override
 	public final AbstractRocksDBSnapshot<K, N, S, SD> snapshot(long checkpointId, long timestamp) throws Exception {
-
-		logDbStats();
 
 		boolean success = false;
 
@@ -379,8 +359,8 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 
 		@Override
 		public final void discardState() throws Exception {
-			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
-			fs.delete(new Path(backupUri), true);
+//			FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
+//			fs.delete(new Path(backupUri), true);
 		}
 
 		@Override
