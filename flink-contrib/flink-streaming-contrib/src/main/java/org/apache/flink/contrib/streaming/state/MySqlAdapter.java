@@ -28,6 +28,9 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.contrib.streaming.state.db.DbAdapter;
+import org.apache.flink.contrib.streaming.state.db.DbBackendConfig;
+import org.apache.flink.contrib.streaming.state.db.SQLRetrier;
 
 /**
  * 
@@ -161,13 +164,13 @@ public class MySqlAdapter implements DbAdapter {
 	}
 
 	@Override
-	public void cleanupFailedCheckpoints(String stateId, Connection con, long checkpointTs,
-			long recoveryTs) throws SQLException {
+	public void cleanupFailedCheckpoints(DbBackendConfig conf, String stateId, Connection con, long checkpointTimestamp,
+			long recoveryTimestamp) throws SQLException {
 		validateStateId(stateId);
 		try (Statement smt = con.createStatement()) {
 			smt.executeUpdate("DELETE FROM " + stateId
-					+ " WHERE timestamp > " + checkpointTs
-					+ " AND timestamp < " + recoveryTs);
+					+ " WHERE timestamp > " + checkpointTimestamp
+					+ " AND timestamp < " + recoveryTimestamp);
 		}
 	}
 
@@ -234,12 +237,4 @@ public class MySqlAdapter implements DbAdapter {
 			insertStatement.setNull(4, Types.BLOB);
 		}
 	}
-	
-	@Override
-	public void keepAlive(Connection con) throws SQLException {
-		try(Statement smt = con.createStatement()) {
-			smt.executeQuery("SELECT 1");
-		}
-	}
-
 }
