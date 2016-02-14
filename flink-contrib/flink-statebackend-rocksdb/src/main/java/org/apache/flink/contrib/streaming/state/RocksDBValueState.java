@@ -27,6 +27,7 @@ import org.apache.flink.runtime.state.KvState;
 
 import org.rocksdb.Options;
 import org.rocksdb.RocksDBException;
+import org.rocksdb.WriteOptions;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -52,6 +53,8 @@ public class RocksDBValueState<K, N, V>
 
 	/** This holds the name of the state and can create an initial default value for the state. */
 	protected final ValueStateDescriptor<V> stateDesc;
+	
+	private final WriteOptions wo = new WriteOptions().setDisableWAL(true).setSync(false);
 
 	/**
 	 * Creates a new {@code RocksDBValueState}.
@@ -129,7 +132,7 @@ public class RocksDBValueState<K, N, V>
 			byte[] key = baos.toByteArray();
 			baos.reset();
 			valueSerializer.serialize(value, out);
-			db.put(key, baos.toByteArray());
+			db.put(wo, key, baos.toByteArray());
 		} catch (Exception e) {
 			throw new RuntimeException("Error while adding data to RocksDB", e);
 		}
