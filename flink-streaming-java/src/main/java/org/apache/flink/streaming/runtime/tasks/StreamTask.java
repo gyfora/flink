@@ -678,7 +678,7 @@ public abstract class StreamTask<OUT, Operator extends StreamOperator<OUT>>
 					triggerCheckpoint(barrier.getId(), barrier.getTimestamp());
 				}
 				catch (Exception e) {
-					throw new RuntimeException("Error triggering a checkpoint as the result of receiving checkpoint barrier", e);
+					LOG.error("Error triggering a checkpoint as the result of receiving checkpoint barrier: {} ", e.getMessage());
 				}
 			}
 		};

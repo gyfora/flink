@@ -900,13 +900,11 @@ public class Task implements Runnable {
 								DeclineCheckpoint decline = new DeclineCheckpoint(jobId, getExecutionId(), checkpointID, checkpointTimestamp);
 								jobManager.tell(decline);
 							}
-						}
-						catch (Throwable t) {
-							if (getExecutionState() == ExecutionState.RUNNING) {
-								failExternally(new RuntimeException(
-									"Error while triggering checkpoint for " + taskName,
-									t));
-							}
+						} catch (Throwable t) {
+							LOG.error("Error while triggering checkpoint for {} : {}", taskName,
+									t.getMessage());
+							DeclineCheckpoint decline = new DeclineCheckpoint(jobId, getExecutionId(), checkpointID, checkpointTimestamp);
+							jobManager.tell(decline);
 						}
 					}
 				};

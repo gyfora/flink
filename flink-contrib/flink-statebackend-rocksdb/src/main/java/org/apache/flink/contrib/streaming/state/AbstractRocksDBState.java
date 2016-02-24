@@ -49,6 +49,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.util.Random;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -379,9 +380,24 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 				}
 			}
 
-			HDFSCopyToLocal.copyToLocal(backupUri, basePath);
-			return createRocksDBState(keySerializer, namespaceSerializer, stateDesc, basePath,
-					checkpointPath, localBackupPath.getAbsolutePath(), stateBackend.getRocksDBOptions());
+			Random rnd = new Random();
+			// Sleep randomly for 1-5 mins before starting
+			Thread.sleep(rnd.nextInt(1000 * 60 * 5));
+			int retries = 0;
+			Exception ex = null;
+			while (++retries <= 3) {
+				try {
+					HDFSCopyToLocal.copyToLocal(backupUri, basePath);
+					return createRocksDBState(keySerializer, namespaceSerializer, stateDesc, basePath,
+							checkpointPath, localBackupPath.getAbsolutePath(), stateBackend.getRocksDBOptions());
+				} catch (Exception e) {
+					FileUtils.deleteQuietly(basePath);
+					LOG.info("Error while copying backup to HDFS.", e.getMessage());
+					ex = e;
+					Thread.sleep(rnd.nextInt(1000 * 60 * 5));
+				}
+			}
+			throw ex;
 		}
 
 		@Override
@@ -422,11 +438,24 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		@Override
 		public KvStateSnapshot<K, N, S, SD, RocksDBStateBackend> materialize() throws Exception {
 			try {
-				long startTime = System.currentTimeMillis();
-				HDFSCopyFromLocal.copyFromLocal(localBackupPath, backupUri);
-				long endTime = System.currentTimeMillis();
-				LOG.info("RocksDB materialization from " + localBackupPath + " to " + backupUri + " (asynchronous part) took " + (endTime - startTime) + " ms.");
-				return state.createRocksDBSnapshot(backupUri, checkpointId);
+				Random rnd = new Random();
+				// Sleep randomly for 1-45 mins before starting
+				Thread.sleep(rnd.nextInt(1000 * 60 * 45));
+				int retries = 0;
+				Exception ex = null;
+				while (++retries <= 5) {
+					try {
+						HDFSCopyFromLocal.copyFromLocal(localBackupPath, backupUri);
+						return state.createRocksDBSnapshot(backupUri, checkpointId);
+					} catch (Exception e) {
+						FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
+						fs.delete(new Path(backupUri), true);
+						LOG.info("Error while copying backup to HDFS.", e.getMessage());
+						ex = e;
+						Thread.sleep(rnd.nextInt(1000 * 60 * 5));
+					}
+				}
+				throw ex;
 			} catch (Exception e) {
 				FileSystem fs = FileSystem.get(backupUri, HadoopFileSystem.getHadoopConfiguration());
 				fs.delete(new Path(backupUri), true);
