@@ -550,7 +550,7 @@ public abstract class StreamTask<OUT, Operator extends StreamOperator<OUT>>
 									LOG.error("Caught exception while materializing asynchronous checkpoints.", e);
 								}
 								if (asyncException == null) {
-									asyncException = new AsynchronousException(e);
+//									asyncException = new AsynchronousException(e);
 								}
 							}
 							asyncCheckpointThreads.remove(this);
