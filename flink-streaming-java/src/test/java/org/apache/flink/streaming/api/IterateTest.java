@@ -17,6 +17,10 @@
 
 package org.apache.flink.streaming.api;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -53,8 +57,6 @@ import org.apache.flink.streaming.util.ReceiveCheckNoOpSink;
 import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
 import org.apache.flink.util.Collector;
 import org.junit.Test;
-
-import static org.junit.Assert.*;
 
 @SuppressWarnings({ "unchecked", "unused", "serial" })
 public class IterateTest extends StreamingMultipleProgramsTestBase {
@@ -518,12 +520,12 @@ public class IterateTest extends StreamingMultipleProgramsTestBase {
 		env.execute();
 	}
 
-	@SuppressWarnings("deprecation")
 	@Test
 	public void testWithCheckPointing() throws Exception {
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		iterated = new boolean[DEFAULT_PARALLELISM];
 
-		env.enableCheckpointing();
+		env.enableCheckpointing(100);
 
 		DataStream<Boolean> source = env .fromCollection(Collections.nCopies(DEFAULT_PARALLELISM * 2, false))
 				.map(NoOpBoolMap).name("ParallelizeMap");
@@ -533,29 +535,7 @@ public class IterateTest extends StreamingMultipleProgramsTestBase {
 
 		iteration.closeWith(iteration.flatMap(new IterationHead())).addSink(new ReceiveCheckNoOpSink<Boolean>());
 
-		try {
-			env.execute();
-
-			// this statement should never be reached
-			fail();
-		} catch (UnsupportedOperationException e) {
-			// expected behaviour
-		}
-
-		// Test force checkpointing
-
-		try {
-			env.enableCheckpointing(1, CheckpointingMode.EXACTLY_ONCE, false);
-			env.execute();
-
-			// this statement should never be reached
-			fail();
-		} catch (UnsupportedOperationException e) {
-			// expected behaviour
-		}
-
-		env.enableCheckpointing(1, CheckpointingMode.EXACTLY_ONCE, true);
-		env.getStreamGraph().getJobGraph();
+		env.execute();
 	}
 
 	public static final class IterationHead extends RichFlatMapFunction<Boolean, Boolean> {

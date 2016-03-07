@@ -27,17 +27,13 @@ import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
-import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.io.StreamInputProcessor;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.types.Either;
+import org.apache.flink.types.Either.Left;
+import org.apache.flink.types.Either.Right;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.concurrent.BlockingQueue;
-
-import static org.apache.flink.types.Either.Left;
-import static org.apache.flink.types.Either.Right;
 
 @Internal
 public class StreamIterationTail<IN> extends StreamTask<IN, OneInputStreamOperator<IN, IN>> {
@@ -61,7 +57,7 @@ public class StreamIterationTail<IN> extends StreamTask<IN, OneInputStreamOperat
 				public void onEvent(CheckpointBarrier barrier) {
 					try {
 						getEnvironment().acknowledgeCheckpoint(barrier.getId());
-						recordPusher.processEither(new Right(barrier));
+						recordPusher.processEither(new Right<StreamRecord<IN>, CheckpointBarrier>(barrier));
 					} catch (Exception e) {
 						e.printStackTrace();
 					}
@@ -87,8 +83,8 @@ public class StreamIterationTail<IN> extends StreamTask<IN, OneInputStreamOperat
 		LOG.info("Iteration tail {} trying to acquire feedback queue under {}", getName(), brokerID);
 
 		@SuppressWarnings("unchecked")
-		BlockingQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel =
-			(BlockingQueue<Either<StreamRecord<IN>, CheckpointBarrier>>) BlockingQueueBroker.INSTANCE.get(brokerID);
+		BackChannel<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel =
+			(BackChannel<Either<StreamRecord<IN>, CheckpointBarrier>>) BackChannelBroker.INSTANCE.getAndRemove(brokerID);
 
 		LOG.info("Iteration tail {} acquired feedback queue {}", getName(), brokerID);
 
@@ -126,20 +122,19 @@ public class StreamIterationTail<IN> extends StreamTask<IN, OneInputStreamOperat
 
 		private static final long serialVersionUID = 1L;
 
-		@SuppressWarnings("NonSerializableFieldInSerializableClass")
-		private final BlockingQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel;
+		private final BackChannel<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel;
 
-		RecordPusher(BlockingQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel) {
+		RecordPusher(BackChannel<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel) {
 			this.dataChannel = dataChannel;
 		}
 
 		public void processEither(Either<StreamRecord<IN>, CheckpointBarrier> recordOrBarrier) throws Exception {
-			dataChannel.put(recordOrBarrier);
+			dataChannel.send(recordOrBarrier);
 		}
 
 		@Override
 		public void processElement(StreamRecord<IN> record) throws Exception {
-			processEither(new Left(record));
+			processEither(new Left<StreamRecord<IN>, CheckpointBarrier>(record));
 		}
 
 		@Override

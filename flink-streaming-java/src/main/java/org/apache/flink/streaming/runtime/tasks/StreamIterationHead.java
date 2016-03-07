@@ -17,11 +17,14 @@
 
 package org.apache.flink.streaming.runtime.tasks;
 
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
+
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
-import org.apache.flink.api.common.state.StateDescriptor;
 import org.apache.flink.api.common.typeutils.base.BooleanSerializer;
 import org.apache.flink.api.common.typeutils.base.VoidSerializer;
 import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
@@ -30,17 +33,12 @@ import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.watermark.Watermark;
-import org.apache.flink.streaming.runtime.io.BlockingQueueBroker;
 import org.apache.flink.streaming.runtime.io.RecordWriterOutput;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecordSerializer;
 import org.apache.flink.types.Either;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
 
 @Internal
 public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
@@ -50,8 +48,9 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 	private volatile boolean running = true;
 
 	/**
-	 * A flag that is on during the duration of a checkpoint. While onSnapshot is true the iteration head has to perform
-	 * upstream backup of all records in transit within the loop.
+	 * A flag that is on during the duration of a checkpoint. While onSnapshot
+	 * is true the iteration head has to perform upstream backup of all records
+	 * in transit within the loop.
 	 */
 	private volatile boolean onSnapshot = false;
 
@@ -62,21 +61,20 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 
 	private volatile RecordWriterOutput<IN>[] outputs;
 
-	private UpstreamLogger<IN> upstreamLogger;
+	private UpstreamLogger upstreamLogger;
 
 	private Object lock;
+
+	private String brokerID;
 
 	@Override
 	public void init() throws Exception {
 		this.lock = getCheckpointLock();
-		ListStateDescriptor<StreamRecord<IN>> streamRecordListStateDescriptor = 
-			new ListStateDescriptor<>("upstream-log",
-			new StreamRecordSerializer<>(getConfiguration().<IN>getTypeSerializerOut(getUserCodeClassLoader())));
-		this.upstreamLogger = new UpstreamLogger(streamRecordListStateDescriptor);
+		this.upstreamLogger = new UpstreamLogger();
 		this.headOperator = upstreamLogger;
-		headOperator.setup(this, getConfiguration(), operatorChain.getChainEntryPoint());
 		operatorChain = new OperatorChain<>(this, headOperator,
-			getEnvironment().getAccumulatorRegistry().getReadWriteReporter());
+				getEnvironment().getAccumulatorRegistry().getReadWriteReporter());
+		headOperator.setup(this, getConfiguration(), getHeadOutput());
 	}
 
 	@Override
@@ -86,38 +84,38 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 		if (iterationId == null || iterationId.length() == 0) {
 			throw new Exception("Missing iteration ID in the task configuration");
 		}
-		final String brokerID = createBrokerIdString(getEnvironment().getJobID(), iterationId,
-			getEnvironment().getTaskInfo().getIndexOfThisSubtask());
+		brokerID = createBrokerIdString(getEnvironment().getJobID(), iterationId,
+				getEnvironment().getTaskInfo().getIndexOfThisSubtask());
 		final long iterationWaitTime = getConfiguration().getIterationWaitTime();
 		final boolean shouldWait = iterationWaitTime > 0;
 
-		final BlockingQueue<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel
-			= new ArrayBlockingQueue<>(1);
+		final BackChannel<Either<StreamRecord<IN>, CheckpointBarrier>> dataChannel = createBackChannel();
 
 		// offer the queue for the tail
-		BlockingQueueBroker.INSTANCE.handIn(brokerID, dataChannel);
+		BackChannelBroker.INSTANCE.handIn(brokerID, dataChannel);
 		LOG.info("Iteration head {} added feedback queue under {}", getName(), brokerID);
 
-		// do the work 
+		// do the work
 		try {
 			outputs = (RecordWriterOutput<IN>[]) getStreamOutputs();
 
-			// If timestamps are enabled we make sure to remove cyclic watermark dependencies
+			// If timestamps are enabled we make sure to remove cyclic watermark
+			// dependencies
 			if (isSerializingTimestamps()) {
 				for (RecordWriterOutput<IN> output : outputs) {
 					output.emitWatermark(new Watermark(Long.MAX_VALUE));
 				}
 			}
 
-			//emit in-flight events in the upstream log upon initialization
+			// emit in-flight events in the upstream log upon initialization
 			synchronized (lock) {
-				flushAndClearLog();
+				LOG.debug("Initializing iteration by flushing the upstream backup if not empty at {}", brokerID);
+				upstreamLogger.flushAndClearLog();
 				hasFlushed = true;
 			}
 			while (running) {
-				Either<StreamRecord<IN>, CheckpointBarrier> nextRecord = shouldWait ?
-					dataChannel.poll(iterationWaitTime, TimeUnit.MILLISECONDS) :
-					dataChannel.take();
+				Either<StreamRecord<IN>, CheckpointBarrier> nextRecord = shouldWait
+						? dataChannel.receive(iterationWaitTime, TimeUnit.MILLISECONDS) : dataChannel.receive();
 
 				synchronized (lock) {
 
@@ -125,42 +123,55 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 
 						if (nextRecord.isLeft()) {
 							if (onSnapshot) {
-								upstreamLogger.listState.add(nextRecord.left());
+								upstreamLogger.processElement(nextRecord.left());
 							} else {
 								for (RecordWriterOutput<IN> output : outputs) {
 									output.collect(nextRecord.left());
 								}
 							}
 						} else {
-							//upon barrier from tail
+							LOG.debug("Received barrier on backedge for {}, takeing snapshot and flushing log...",
+									brokerID);
 							checkpointStatesInternal(nextRecord.right().getId(), nextRecord.right().getTimestamp());
-							flushAndClearLog();
+							upstreamLogger.flushAndClearLog();
 							onSnapshot = false;
 						}
 
 					} else {
-						flushAndClearLog();
+						LOG.debug("Input stream ended for {}, flushing upstream log if not empty...", brokerID);
+						upstreamLogger.flushAndClearLog();
 						break;
 					}
 				}
 			}
 		} finally {
-			// make sure that we remove the queue from the broker, to prevent a resource leak
-			BlockingQueueBroker.INSTANCE.remove(brokerID);
+			// make sure that we remove the queue from the broker, to prevent a
+			// resource leak
+			BackChannelBroker.INSTANCE.remove(brokerID);
 			LOG.info("Iteration head {} removed feedback queue under {}", getName(), brokerID);
 		}
 	}
 
-	private void flushAndClearLog() throws Exception {
-		synchronized (lock) {
-			Iterable<StreamRecord<IN>> logIterator = upstreamLogger.listState.get();
-			for (StreamRecord<IN> record : logIterator) {
-				for (RecordWriterOutput<IN> output : outputs) {
-					output.collect(record);
-				}
+	private BackChannel<Either<StreamRecord<IN>, CheckpointBarrier>> createBackChannel() {
+		return new BackChannel<Either<StreamRecord<IN>,CheckpointBarrier>>() {
+			
+			BlockingQueue<Either<StreamRecord<IN>,CheckpointBarrier>> q = new ArrayBlockingQueue<>(100);
+
+			@Override
+			public void send(Either<StreamRecord<IN>, CheckpointBarrier> data) throws Exception {
+				q.put(data);
 			}
-			upstreamLogger.listState.clear();
-		}
+
+			@Override
+			public Either<StreamRecord<IN>, CheckpointBarrier> receive() throws Exception {
+				return q.take();
+			}
+
+			@Override
+			public Either<StreamRecord<IN>, CheckpointBarrier> receive(long timeout, TimeUnit timeUnit) throws Exception {
+				return q.poll(timeout, timeUnit);
+			}
+		};
 	}
 
 	@Override
@@ -170,22 +181,24 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 
 	@Override
 	protected void cleanup() throws Exception {
-		//nothing to cleanup
+		// nothing to cleanup
 	}
 
-
 	// ------------------------------------------------------------------------
-	//  Utilities
+	// Utilities
 	// ------------------------------------------------------------------------
 
 	/**
-	 * Creates the identification string with which head and tail task find the shared blocking
-	 * queue for the back channel. The identification string is unique per parallel head/tail pair
-	 * per iteration per job.
+	 * Creates the identification string with which head and tail task find the
+	 * shared blocking queue for the back channel. The identification string is
+	 * unique per parallel head/tail pair per iteration per job.
 	 *
-	 * @param jid          The job ID.
-	 * @param iterationID  The id of the iteration in the job.
-	 * @param subtaskIndex The parallel subtask number
+	 * @param jid
+	 *            The job ID.
+	 * @param iterationID
+	 *            The id of the iteration in the job.
+	 * @param subtaskIndex
+	 *            The parallel subtask number
 	 * @return The identification string.
 	 */
 	public static String createBrokerIdString(JobID jid, String iterationID, int subtaskIndex) {
@@ -195,7 +208,7 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 	@Override
 	public boolean triggerCheckpoint(long checkpointId, long timestamp) throws Exception {
 
-		//invoked upon barrier from Runtime
+		// invoked upon barrier from Runtime
 		synchronized (lock) {
 			operatorChain.broadcastCheckpointBarrier(checkpointId, timestamp);
 
@@ -203,30 +216,29 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 				LOG.debug("Iteration head {} aborting checkpoint {}", getName(), checkpointId);
 				return false;
 			}
+			LOG.debug("Received trigger checkpoint message at {}, starting upstream log...", brokerID);
 			onSnapshot = true;
 			return true;
 		}
 	}
 
 	/**
-	 * Internal operator that solely serves as a state logging facility for persisting and restoring upstream backups
+	 * Internal operator that solely serves as a state logging facility for
+	 * persisting and restoring upstream backups
 	 */
-	public static class UpstreamLogger<IN> extends AbstractStreamOperator<IN> implements OneInputStreamOperator<IN, IN> {
+	public class UpstreamLogger extends AbstractStreamOperator<IN>
+			implements OneInputStreamOperator<IN, IN> {
 
-		
+		private static final long serialVersionUID = 1L;
+
 		/**
-		 * The upstreamLog is used to store all records that should be logged throughout the duration of each checkpoint instance.
-		 * These are part of the iteration head operator state for that snapshot and represent the records in transit for the backedge of
-		 * an iteration cycle.
+		 * The upstreamLog is used to store all records that should be logged
+		 * throughout the duration of each checkpoint instance. These are part
+		 * of the iteration head operator state for that snapshot and represent
+		 * the records in transit for the backedge of an iteration cycle.
 		 */
 		private ListState<StreamRecord<IN>> listState;
-
-		private final StateDescriptor<? extends ListState<StreamRecord<IN>>, ?> stateDescriptor;
-
-
-		private UpstreamLogger(StateDescriptor<? extends ListState<StreamRecord<IN>>, ?> streamRecordSerializer) {
-			this.stateDescriptor = streamRecordSerializer;
-		}
+		private ListStateDescriptor<StreamRecord<IN>> stateDescriptor;
 
 		@Override
 		public void open() throws Exception {
@@ -236,19 +248,38 @@ public class StreamIterationHead<IN> extends OneInputStreamTask<IN, IN> {
 		}
 
 		@Override
-		public void setup(StreamTask<?, ?> containingTask, StreamConfig config, Output<StreamRecord<IN>> output) {
+		public void setup(StreamTask<?, ?> task, StreamConfig config, Output<StreamRecord<IN>> output) {
 			config.setStateKeySerializer(BooleanSerializer.INSTANCE);
-			super.setup(containingTask, config, output);
+			super.setup(task, config, output);
+
+			stateDescriptor = new ListStateDescriptor<>(
+					"upstream-log",
+					new StreamRecordSerializer<>(
+							task.getConfiguration().<IN> getTypeSerializerOut(task.getUserCodeClassLoader())));
 		}
 
 		@Override
 		public void processElement(StreamRecord<IN> element) throws Exception {
-			//nothing to do
+			listState.add(element);
 		}
 
 		@Override
 		public void processWatermark(Watermark mark) throws Exception {
-			//nothing to do
+			throw new RuntimeException("Watermarks should not be forwarded on the back edges.");
+		}
+
+		public void flushAndClearLog() throws Exception {
+			long count = 0;
+			for (StreamRecord<IN> record : listState.get()) {
+				output.collect(record);
+				count++;
+			}
+			listState.clear();
+			if (count > 0) {
+				LOG.debug("Flushed {} records at {}", count, brokerID);
+			} else {
+				LOG.debug("Upstream backup was empty at {}", brokerID);
+			}
 		}
 
 	}
