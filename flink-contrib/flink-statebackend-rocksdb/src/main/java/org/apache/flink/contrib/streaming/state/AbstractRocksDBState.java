@@ -439,11 +439,11 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 		public KvStateSnapshot<K, N, S, SD, RocksDBStateBackend> materialize() throws Exception {
 			try {
 				Random rnd = new Random();
-				// Sleep randomly for 1-60 mins before starting
-				Thread.sleep(rnd.nextInt(1000 * 60 * 60));
+				// Sleep randomly for 1-90 mins before starting
+				Thread.sleep(rnd.nextInt(1000 * 90 * 60));
 				int retries = 0;
 				Exception ex = null;
-				while (++retries <= 10) {
+				while (++retries <= 15) {
 					try {
 						HDFSCopyFromLocal.copyFromLocal(localBackupPath, backupUri);
 						return state.createRocksDBSnapshot(backupUri, checkpointId);
@@ -452,7 +452,7 @@ public abstract class AbstractRocksDBState<K, N, S extends State, SD extends Sta
 						fs.delete(new Path(backupUri), true);
 						LOG.info("Error while copying backup to HDFS.", e.getMessage());
 						ex = e;
-						Thread.sleep(rnd.nextInt(1000 * 60 * 15));
+						Thread.sleep(rnd.nextInt(1000 * 60 * 20));
 					}
 				}
 				throw ex;
