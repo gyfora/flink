@@ -270,7 +270,11 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 		instanceBasePath = new File(getDbPath("dummy_state"), UUID.randomUUID().toString());
 		instanceCheckpointPath = getCheckpointPath("dummy_state");
 		instanceRocksDBPath = new File(instanceBasePath, "db");
-
+		kvStateInformation = new HashMap<>();
+		dbCleanupLock = new Object();
+	}
+	
+	protected void initDb() {
 		RocksDB.loadLibrary();
 
 		if (!instanceBasePath.exists()) {
@@ -289,8 +293,6 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 			throw new RuntimeException("Error cleaning RocksDB data directory.", e);
 		}
 
-		dbCleanupLock = new Object();
-
 		List<ColumnFamilyDescriptor> columnFamilyDescriptors = new ArrayList<>(1);
 		// RocksDB seems to need this...
 		columnFamilyDescriptors.add(new ColumnFamilyDescriptor("default".getBytes()));
@@ -300,10 +302,8 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 		} catch (RocksDBException e) {
 			throw new RuntimeException("Error while opening RocksDB instance.", e);
 		}
-
-		kvStateInformation = new HashMap<>();
 	}
-
+	
 	@Override
 	public void disposeAllStateForCurrentJob() throws Exception {
 		nonPartitionedStateBackend.disposeAllStateForCurrentJob();
@@ -506,28 +506,7 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 			}
 		}
 
-		db.dispose();
-
-		// clean it, this will remove the last part of the path but RocksDB will recreate it
-		try {
-			if (instanceRocksDBPath.exists()) {
-				LOG.warn("Deleting already existing db directory {}.", instanceRocksDBPath);
-				FileUtils.deleteDirectory(instanceRocksDBPath);
-			}
-		} catch (IOException e) {
-			throw new RuntimeException("Error cleaning RocksDB data directory.", e);
-		}
-
 		final File localBackupPath = new File(instanceBasePath, "chk-" + snapshot.checkpointId);
-
-		if (localBackupPath.exists()) {
-			try {
-				LOG.warn("Deleting already existing local backup directory {}.", localBackupPath);
-				FileUtils.deleteDirectory(localBackupPath);
-			} catch (IOException e) {
-				throw new RuntimeException("Error cleaning RocksDB local backup directory.", e);
-			}
-		}
 
 		HDFSCopyToLocal.copyToLocal(snapshot.backupUri, instanceBasePath);
 
@@ -837,7 +816,12 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 	 * that we checkpointed, i.e. is already in the map of column families.
 	 */
 	protected ColumnFamilyHandle getColumnFamily(StateDescriptor descriptor)  {
-
+		
+		// Initialize the RocksDB instance lazily on first access
+		if (db == null) {
+			initDb();
+		}
+		
 		Tuple2<ColumnFamilyHandle, StateDescriptor> stateInfo = kvStateInformation.get(descriptor.getName());
 
 		if (stateInfo != null) {
