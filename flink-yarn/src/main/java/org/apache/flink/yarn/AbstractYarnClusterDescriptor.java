@@ -596,13 +596,18 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		// ship list that enables reuse of resources for task manager containers
 		StringBuilder envShipFileList = new StringBuilder();
 
+		String shipFileDir = flinkConfiguration.getString(ConfigConstants.YARN_RESOURCE_SHIP_PATH, null);
+		
+		Path shipFilePath = shipFileDir != null ? new Path(shipFileDir) : fs.getHomeDirectory();
+		LOG.info("Using " + shipFilePath + " as the base directory for sharing resources on the YARN cluster.");
+		
 		// upload and register ship files
 		for (File shipFile : effectiveShipFiles) {
 			LocalResource shipResources = Records.newRecord(LocalResource.class);
 
 			Path shipLocalPath = new Path("file://" + shipFile.getAbsolutePath());
 			Path remotePath =
-				Utils.setupLocalResource(fs, appId.toString(), shipLocalPath, shipResources, fs.getHomeDirectory());
+				Utils.setupLocalResource(fs, appId.toString(), shipLocalPath, shipResources, shipFilePath);
 
 			paths.add(remotePath);
 
@@ -621,10 +626,11 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		// Setup jar for ApplicationMaster
 		LocalResource appMasterJar = Records.newRecord(LocalResource.class);
 		LocalResource flinkConf = Records.newRecord(LocalResource.class);
+		
 		Path remotePathJar =
-			Utils.setupLocalResource(fs, appId.toString(), flinkJarPath, appMasterJar, fs.getHomeDirectory());
+			Utils.setupLocalResource(fs, appId.toString(), flinkJarPath, appMasterJar, shipFilePath);
 		Path remotePathConf =
-			Utils.setupLocalResource(fs, appId.toString(), flinkConfigurationPath, flinkConf, fs.getHomeDirectory());
+			Utils.setupLocalResource(fs, appId.toString(), flinkConfigurationPath, flinkConf, shipFilePath);
 		localResources.put("flink.jar", appMasterJar);
 		localResources.put("flink-conf.yaml", flinkConf);
 
@@ -633,7 +639,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		paths.add(remotePathConf);
 		classPathBuilder.append("flink-conf.yaml").append(File.pathSeparator);
 
-		sessionFilesDir = new Path(fs.getHomeDirectory(), ".flink/" + appId.toString() + "/");
+		sessionFilesDir = new Path(shipFilePath, ".flink/" + appId.toString() + "/");
 
 		FsPermission permission = new FsPermission(FsAction.ALL, FsAction.NONE, FsAction.NONE);
 		fs.setPermission(sessionFilesDir, permission); // set permission for path.
@@ -656,7 +662,7 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 		appMasterEnv.put(YarnConfigKeys.ENV_TM_MEMORY, String.valueOf(taskManagerMemoryMb));
 		appMasterEnv.put(YarnConfigKeys.FLINK_JAR_PATH, remotePathJar.toString() );
 		appMasterEnv.put(YarnConfigKeys.ENV_APP_ID, appId.toString());
-		appMasterEnv.put(YarnConfigKeys.ENV_CLIENT_HOME_DIR, fs.getHomeDirectory().toString());
+		appMasterEnv.put(YarnConfigKeys.ENV_CLIENT_HOME_DIR, shipFilePath.toString());
 		appMasterEnv.put(YarnConfigKeys.ENV_CLIENT_SHIP_FILES, envShipFileList.toString());
 		appMasterEnv.put(YarnConfigKeys.ENV_CLIENT_USERNAME, UserGroupInformation.getCurrentUser().getShortUserName());
 		appMasterEnv.put(YarnConfigKeys.ENV_SLOTS, String.valueOf(slots));
@@ -1063,4 +1069,3 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 			perJobCluster);
 	}
 }
-

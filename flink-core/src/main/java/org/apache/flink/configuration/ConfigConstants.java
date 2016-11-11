@@ -461,6 +461,12 @@ public final class ConfigConstants {
 	 * Setting the port to 0 will let the OS choose an available port.
 	 */
 	public static final String YARN_APPLICATION_MASTER_PORT = "yarn.application-master.port";
+	
+	/**
+	 * The base directory where files will be copied to ship for YARN cluster
+	 * execution. If not set it should default to the FS home directory
+	 */
+	public static final String YARN_RESOURCE_SHIP_PATH = "yarn.resource.ship.path";
 
 
 	// ------------------------ Hadoop Configuration ------------------------
