@@ -22,7 +22,6 @@ import org.apache.flink.client.CliFrontend;
 import org.apache.flink.client.deployment.ClusterDescriptor;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.GlobalConfiguration;
-import org.apache.flink.configuration.IllegalConfigurationException;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.jobmanager.RecoveryMode;
 import org.apache.hadoop.conf.Configuration;
@@ -264,11 +263,11 @@ public abstract class AbstractYarnClusterDescriptor implements ClusterDescriptor
 
 		int numYarnVcores = conf.getInt(YarnConfiguration.NM_VCORES, YarnConfiguration.DEFAULT_NM_VCORES);
 		// don't configure more than the maximum configured number of vcores
-		if (slots > numYarnVcores) {
-			throw new IllegalConfigurationException(
-				String.format("The number of task slots per node was configured with %d" +
-					" but Yarn only has %d virtual cores available.", slots, numYarnVcores));
-		}
+//		if (slots > numYarnVcores) {
+//			throw new IllegalConfigurationException(
+//				String.format("The number of task slots per node was configured with %d" +
+//					" but Yarn only has %d virtual cores available.", slots, numYarnVcores));
+//		}
 
 		// check if required Hadoop environment variables are set. If not, warn user
 		if(System.getenv("HADOOP_CONF_DIR") == null &&
