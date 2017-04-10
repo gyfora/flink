@@ -51,6 +51,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 
 import static java.util.Objects.requireNonNull;
 
@@ -303,7 +304,10 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 		if (partitioner == null) {
 			record = new ProducerRecord<>(targetTopic, serializedKey, serializedValue);
 		} else {
-			record = new ProducerRecord<>(targetTopic, partitioner.partition(next, serializedKey, serializedValue, partitions.length), serializedKey, serializedValue);
+			record = new ProducerRecord<>(targetTopic,
+					partitioner.partition(next, serializedKey, serializedValue, getNumPartitions(targetTopic)), 
+					serializedKey,
+					serializedValue);
 		}
 		if (flushOnCheckpoint) {
 			synchronized (pendingRecordsLock) {
@@ -311,6 +315,17 @@ public abstract class FlinkKafkaProducerBase<IN> extends RichSinkFunction<IN> im
 			}
 		}
 		producer.send(record, callback);
+	}
+
+	private Map<String, Integer> numPartitions = new HashMap<String, Integer>();
+
+	private int getNumPartitions(String targetTopic) {
+		Integer num = numPartitions.get(targetTopic);
+		if(num == null) {
+			num = producer.partitionsFor(targetTopic).size();
+			numPartitions.put(targetTopic, num);
+		}
+		return num;
 	}
 
 
