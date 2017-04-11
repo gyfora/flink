@@ -288,7 +288,7 @@ public class HeapInternalTimerService<K, N> implements InternalTimerService<N>, 
 
 		// write the event time timers
 		Set<InternalTimer<K, N>> eventTimers = getEventTimeTimerSetForKeyGroup(keyGroupIdx);
-		if (eventTimers != null) {
+		if (isInitialized && eventTimers != null) {
 			stream.writeInt(eventTimers.size());
 			for (InternalTimer<K, N> timer : eventTimers) {
 				this.timerSerializer.serialize(timer, stream);
@@ -299,7 +299,7 @@ public class HeapInternalTimerService<K, N> implements InternalTimerService<N>, 
 
 		// write the processing time timers
 		Set<InternalTimer<K, N>> processingTimers = getProcessingTimeTimerSetForKeyGroup(keyGroupIdx);
-		if (processingTimers != null) {
+		if (isInitialized && processingTimers != null) {
 			stream.writeInt(processingTimers.size());
 			for (InternalTimer<K, N> timer : processingTimers) {
 				this.timerSerializer.serialize(timer, stream);
