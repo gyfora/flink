@@ -420,6 +420,17 @@ public class CheckpointCoordinator {
 	public boolean triggerCheckpoint(long timestamp, boolean isPeriodic) {
 		return triggerCheckpoint(timestamp, checkpointProperties, checkpointDirectory, isPeriodic).isSuccess();
 	}
+	
+	public Future<CompletedCheckpoint> forceTriggerCheckpoint(long timestamp, boolean isPeriodic) {
+		CheckpointTriggerResult triggerResult = triggerCheckpoint(timestamp, checkpointProperties.force(), checkpointDirectory,
+				isPeriodic);
+		if (triggerResult.isSuccess()) {
+			return triggerResult.getPendingCheckpoint().getCompletionFuture();
+		} else {
+			Throwable cause = new Exception("Failed to trigger savepoint: " + triggerResult.getFailureReason().message());
+			return FlinkCompletableFuture.completedExceptionally(cause);
+		}
+	}
 
 	/**
 	 * Test method to trigger a checkpoint/savepoint.

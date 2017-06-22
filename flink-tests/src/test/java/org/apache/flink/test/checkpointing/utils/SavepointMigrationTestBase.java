@@ -168,7 +168,7 @@ public class SavepointMigrationTestBase extends TestBaseUtils {
 		LOG.info("Triggering savepoint.");
 
 		final Future<Object> savepointResultFuture =
-				jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobSubmissionResult.getJobID(), Option.<String>empty()), DEADLINE.timeLeft());
+				jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobSubmissionResult.getJobID(), Option.<String>empty(), false), DEADLINE.timeLeft());
 
 		Object savepointResult = Await.result(savepointResultFuture, DEADLINE.timeLeft());
 

@@ -99,6 +99,7 @@ import scala.concurrent.duration.FiniteDuration;
 import static org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepoint;
 import static org.apache.flink.runtime.messages.JobManagerMessages.DisposeSavepointFailure;
 
+
 /**
  * Implementation of a simple command line frontend for executing programs.
  */
@@ -113,6 +114,7 @@ public class CliFrontend {
 	private static final String ACTION_CANCEL = "cancel";
 	private static final String ACTION_STOP = "stop";
 	private static final String ACTION_SAVEPOINT = "savepoint";
+	private static final String ACTION_CHECKPOINT = "checkpoint";
 
 	// config dir parameters
 	private static final String CONFIG_DIRECTORY_FALLBACK_1 = "../conf";
@@ -648,7 +650,7 @@ public class CliFrontend {
 	 *
 	 * @param args Command line arguments for the cancel action.
 	 */
-	protected int savepoint(String[] args) {
+	protected int savepoint(String[] args, boolean checkpoint) {
 		LOG.info("Running 'savepoint' command.");
 
 		SavepointOptions options;
@@ -698,7 +700,7 @@ public class CliFrontend {
 				logAndSysout("Provided more arguments than required. Ignoring not needed arguments.");
 			}
 
-			return triggerSavepoint(options, jobId, savepointDirectory);
+			return triggerSavepoint(options, jobId, savepointDirectory, checkpoint);
 		}
 	}
 
@@ -706,8 +708,9 @@ public class CliFrontend {
 	 * Sends a {@link org.apache.flink.runtime.messages.JobManagerMessages.TriggerSavepoint}
 	 * message to the job manager.
 	 */
-	private int triggerSavepoint(SavepointOptions options, JobID jobId, String savepointDirectory) {
+	private int triggerSavepoint(SavepointOptions options, JobID jobId, String savepointDirectory, boolean checkpoint) {
 		try {
+<<<<<<< HEAD
 			CustomCommandLine<?> activeCommandLine = getActiveCustomCommandLine(options.getCommandLine());
 			ClusterClient client = activeCommandLine.retrieveCluster(options.getCommandLine(), config, configurationDirectory);
 			try {
@@ -725,12 +728,43 @@ public class CliFrontend {
 				}
 
 				logAndSysout("Savepoint completed. Path: " + savepointPath);
+=======
+			ActorGateway jobManager = getJobManagerGateway(options);
+
+			logAndSysout("Triggering savepoint for job " + jobId + ".");
+			Future<Object> response = jobManager.ask(new TriggerSavepoint(jobId, Option.apply(savepointDirectory), checkpoint),
+					clientTimeout);
+
+			Object result;
+			try {
+				logAndSysout("Waiting for response...");
+				result = Await.result(response, clientTimeout);
+			}
+			catch (Exception e) {
+				throw new Exception("Triggering a savepoint for the job " + jobId + " failed.", e);
+			}
+
+			if (result instanceof TriggerSavepointSuccess) {
+				TriggerSavepointSuccess success = (TriggerSavepointSuccess) result;
+				logAndSysout(checkpoint ? "Checkpoint" : "Savepoint" + " completed. Path: " + success.savepointPath());
+>>>>>>> a03fa30... Add Checkpoint operation to CLI
 				logAndSysout("You can resume your program from this savepoint with the run command.");
 
 				return 0;
 			}
+<<<<<<< HEAD
 			finally {
 				client.shutdown();
+=======
+			else if (result instanceof TriggerSavepointFailure) {
+				TriggerSavepointFailure failure = (TriggerSavepointFailure) result;
+				throw failure.cause();
+			}
+			else {
+//				throw new IllegalStateException("Unknown JobManager response of type " +
+//						result.getClass());
+				return 0;
+>>>>>>> a03fa30... Add Checkpoint operation to CLI
 			}
 		}
 		catch (Throwable t) {
@@ -1061,7 +1095,9 @@ public class CliFrontend {
 			case ACTION_STOP:
 				return stop(params);
 			case ACTION_SAVEPOINT:
-				return savepoint(params);
+				return savepoint(params, false);
+			case ACTION_CHECKPOINT:
+				return savepoint(params, true);
 			case "-h":
 			case "--help":
 				CliFrontendParser.printHelp();

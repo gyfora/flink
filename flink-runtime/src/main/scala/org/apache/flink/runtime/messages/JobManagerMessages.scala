@@ -480,7 +480,8 @@ object JobManagerMessages {
     */
   case class TriggerSavepoint(
       jobId: JobID,
-      savepointDirectory : Option[String] = Option.empty) extends RequiresLeaderSessionID
+      savepointDirectory : Option[String] = Option.empty,
+      checkpoint : Boolean = false) extends RequiresLeaderSessionID
 
   /**
     * Response after a successful savepoint trigger containing the savepoint path.
@@ -494,6 +495,8 @@ object JobManagerMessages {
     savepointPath: String,
     triggerTime: Long
   )
+
+  case class TriggerCheckpointSuccess(jobID: JobID)
 
   /**
     * Response after a failed savepoint trigger containing the failure cause.
