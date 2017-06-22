@@ -739,7 +739,7 @@ class JobManager(
     case kvStateMsg : KvStateMessage =>
       handleKvStateMessage(kvStateMsg)
 
-    case TriggerSavepoint(jobId, savepointDirectory) =>
+    case TriggerSavepoint(jobId, savepointDirectory, checkpoint) =>
       currentJobs.get(jobId) match {
         case Some((graph, _)) =>
           val checkpointCoordinator = graph.getCheckpointCoordinator()
@@ -757,13 +757,16 @@ class JobManager(
                   "configure a cluster-wide default via key '" +
                   CoreOptions.SAVEPOINT_DIRECTORY.key() + "'.")
               }
-
-              // Do this async, because checkpoint coordinator operations can
+              
+               // Do this async, because checkpoint coordinator operations can
               // contain blocking calls to the state backend or ZooKeeper.
-              val savepointFuture = checkpointCoordinator.triggerSavepoint(
-                System.currentTimeMillis(),
-                targetDirectory)
-
+              val savepointFuture = if (checkpoint) {
+                    checkpointCoordinator.forceTriggerCheckpoint(
+                    System.currentTimeMillis(), false) } else {
+                    checkpointCoordinator.triggerSavepoint(
+                    System.currentTimeMillis(),
+                    targetDirectory) }
+              
               savepointFuture.handleAsync[Void](
                 new BiFunction[CompletedCheckpoint, Throwable, Void] {
                   override def apply(success: CompletedCheckpoint, cause: Throwable): Void = {
@@ -787,6 +790,8 @@ class JobManager(
                   }
                 },
                 context.dispatcher)
+
+              
             } catch {
               case e: Exception =>
                 senderRef ! TriggerSavepointFailure(jobId, new Exception(
@@ -1289,7 +1294,7 @@ class JobManager(
           numSlots,
           blobServer,
           log.logger)
-        
+
         if (registerNewGraph) {
           currentJobs.put(jobGraph.getJobID, (executionGraph, jobInfo))
         }
@@ -1348,7 +1353,7 @@ class JobManager(
                 val allowNonRestored = savepointSettings.allowNonRestoredState()
 
                 executionGraph.getCheckpointCoordinator.restoreSavepoint(
-                  savepointPath, 
+                  savepointPath,
                   allowNonRestored,
                   executionGraph.getAllVertices,
                   executionGraph.getUserClassLoader
@@ -1597,7 +1602,7 @@ class JobManager(
 
   /**
    * Dedicated handler for monitor info request messages.
-   * 
+   *
    * Note that this handler does not fail. Errors while responding to info messages are logged,
    * but will not cause the actor to crash.
    *
@@ -1647,8 +1652,8 @@ class JobManager(
                 ourJobs, archiveOverview)
           }(context.dispatcher)
 
-        case msg : RequestJobDetails => 
-          
+        case msg : RequestJobDetails =>
+
           val ourDetails: Array[JobDetails] = if (msg.shouldIncludeRunning()) {
             currentJobs.values.map {
               v => WebMonitorUtils.createDetailsForJob(v._1)
@@ -1656,7 +1661,7 @@ class JobManager(
           } else {
             null
           }
-          
+
           if (msg.shouldIncludeFinished()) {
             val future = (archive ? msg)(timeout)
             future.onSuccess {
@@ -1668,7 +1673,7 @@ class JobManager(
           } else {
             theSender ! new MultipleJobsDetails(util.Arrays.asList(ourDetails: _*), null)
           }
-          
+
         case _ => log.error("Unrecognized info message " + actorMessage)
       }
     }
@@ -1700,7 +1705,7 @@ class JobManager(
     val finished = new java.util.ArrayList[JobID]()
     val canceled = new java.util.ArrayList[JobID]()
     val failed = new java.util.ArrayList[JobID]()
-    
+
     currentJobs.values.foreach { case (graph, _) =>
       graph.getState() match {
         case JobStatus.FINISHED => finished.add(graph.getJobID)
@@ -1829,7 +1834,7 @@ class JobManager(
     // terminate JobManager in case of an error
     self ! decorateMessage(PoisonPill)
   }
-  
+
   /**
    * Updates the accumulators reported from a task manager via the Heartbeat message.
    *
@@ -2303,7 +2308,7 @@ object JobManager {
     val parser = new scopt.OptionParser[JobManagerCliOptions]("JobManager") {
       head("Flink JobManager")
 
-      opt[String]("configDir") action { (arg, conf) => 
+      opt[String]("configDir") action { (arg, conf) =>
         conf.setConfigDir(arg)
         conf
       } text {
@@ -2336,9 +2341,9 @@ object JobManager {
       throw new Exception(
         s"Invalid command line arguments: ${args.mkString(" ")}. Usage: ${parser.usage}")
     }
-    
+
     val configDir = cliOptions.getConfigDir()
-    
+
     if (configDir == null) {
       throw new Exception("Missing parameter '--configDir'")
     }
@@ -2493,7 +2498,7 @@ object JobManager {
         if (blobServer != null) {
           blobServer.close()
         }
-        
+
         throw t
     }
 

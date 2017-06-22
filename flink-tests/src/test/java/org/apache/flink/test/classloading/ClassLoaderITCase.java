@@ -354,8 +354,8 @@ public class ClassLoaderITCase extends TestLogger {
 		// Trigger savepoint
 		String savepointPath = null;
 		for (int i = 0; i < 20; i++) {
-			LOG.info("Triggering savepoint (" + (i + 1) + "/20).");
-			Future<Object> savepointFuture = jm.ask(new TriggerSavepoint(jobId, Option.<String>empty()), deadline.timeLeft());
+			LOG.info("Triggering savepoint (" + (i+1) + "/20).");
+			Future<Object> savepointFuture = jm.ask(new TriggerSavepoint(jobId, Option.<String>empty(), false), deadline.timeLeft());
 
 			Object savepointResponse = Await.result(savepointFuture, deadline.timeLeft());
 
