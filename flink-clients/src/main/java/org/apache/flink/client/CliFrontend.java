@@ -729,7 +729,7 @@ public class CliFrontend {
 
 			if (result instanceof TriggerSavepointSuccess) {
 				TriggerSavepointSuccess success = (TriggerSavepointSuccess) result;
-				logAndSysout(checkpoint ? "Checkpoint" : "Savepoint" + " completed. Path: " + success.savepointPath());
+				logAndSysout((checkpoint ? "Checkpoint" : "Savepoint") + " completed. Path: " + success.savepointPath());
 				logAndSysout("You can resume your program from this savepoint with the run command.");
 
 				return 0;
