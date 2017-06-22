@@ -76,7 +76,7 @@ public class CliFrontendSavepointTest {
 			Promise<Object> triggerResponse = new scala.concurrent.impl.Promise.DefaultPromise<>();
 
 			when(jobManager.ask(
-					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty())),
+					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty(), false)),
 					any(FiniteDuration.class)))
 					.thenReturn(triggerResponse.future());
 
@@ -88,11 +88,11 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { jobId.toString() };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertEquals(0, returnCode);
 			verify(jobManager, times(1)).ask(
-					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty())),
+					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty(), false)),
 					any(FiniteDuration.class));
 
 			assertTrue(buffer.toString().contains("expectedSavepointPath"));
@@ -113,7 +113,7 @@ public class CliFrontendSavepointTest {
 			Promise<Object> triggerResponse = new scala.concurrent.impl.Promise.DefaultPromise<>();
 
 			when(jobManager.ask(
-					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty())),
+					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty(), false)),
 					any(FiniteDuration.class)))
 					.thenReturn(triggerResponse.future());
 
@@ -125,11 +125,11 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { jobId.toString() };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertTrue(returnCode != 0);
 			verify(jobManager, times(1)).ask(
-					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty())),
+					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty(), false)),
 					any(FiniteDuration.class));
 
 			assertTrue(buffer.toString().contains("expectedTestException"));
@@ -147,7 +147,7 @@ public class CliFrontendSavepointTest {
 			CliFrontend frontend = new CliFrontend(CliFrontendTestUtils.getConfigDir());
 
 			String[] parameters = { "invalid job id" };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertTrue(returnCode != 0);
 			assertTrue(buffer.toString().contains("not a valid ID"));
@@ -168,7 +168,7 @@ public class CliFrontendSavepointTest {
 			Promise<Object> triggerResponse = new scala.concurrent.impl.Promise.DefaultPromise<>();
 
 			when(jobManager.ask(
-					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty())),
+					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty(), false)),
 					any(FiniteDuration.class)))
 					.thenReturn(triggerResponse.future());
 
@@ -178,11 +178,11 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { jobId.toString() };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertTrue(returnCode != 0);
 			verify(jobManager, times(1)).ask(
-					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty())),
+					Mockito.eq(new TriggerSavepoint(jobId, Option.<String>empty(), false)),
 					any(FiniteDuration.class));
 
 			String errMsg = buffer.toString();
@@ -210,7 +210,7 @@ public class CliFrontendSavepointTest {
 			Promise<Object> triggerResponse = new scala.concurrent.impl.Promise.DefaultPromise<>();
 
 			when(jobManager.ask(
-					Mockito.eq(new TriggerSavepoint(jobId, customTarget)),
+					Mockito.eq(new TriggerSavepoint(jobId, customTarget, false)),
 					any(FiniteDuration.class)))
 					.thenReturn(triggerResponse.future());
 			String savepointPath = "expectedSavepointPath";
@@ -220,11 +220,11 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { jobId.toString(), customTarget.get() };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertEquals(0, returnCode);
 			verify(jobManager, times(1)).ask(
-					Mockito.eq(new TriggerSavepoint(jobId, customTarget)),
+					Mockito.eq(new TriggerSavepoint(jobId, customTarget, false)),
 					any(FiniteDuration.class));
 
 			assertTrue(buffer.toString().contains("expectedSavepointPath"));
@@ -258,7 +258,7 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { "-d", savepointPath };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertEquals(0, returnCode);
 			verify(jobManager, times(1)).ask(
@@ -294,7 +294,7 @@ public class CliFrontendSavepointTest {
 
 			String[] parameters = { "-d", "any-path" };
 
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 			assertTrue(returnCode != 0);
 
 			String out = buffer.toString();
@@ -326,7 +326,7 @@ public class CliFrontendSavepointTest {
 
 			String[] parameters = { "-d", "any-path", "-j", f.getAbsolutePath() };
 
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 			assertEquals(0, returnCode);
 		} finally {
 			restoreStdOutAndStdErr();
@@ -356,7 +356,7 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { "-d", savepointPath };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertTrue(returnCode != 0);
 			verify(jobManager, times(1)).ask(
@@ -391,7 +391,7 @@ public class CliFrontendSavepointTest {
 					CliFrontendTestUtils.getConfigDir(), jobManager);
 
 			String[] parameters = { "-d", savepointPath };
-			int returnCode = frontend.savepoint(parameters);
+			int returnCode = frontend.savepoint(parameters, false);
 
 			assertTrue(returnCode != 0);
 			verify(jobManager, times(1)).ask(

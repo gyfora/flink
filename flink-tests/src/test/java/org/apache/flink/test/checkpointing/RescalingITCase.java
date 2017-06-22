@@ -207,7 +207,7 @@ public class RescalingITCase extends TestLogger {
 			// clear the CollectionSink set for the restarted job
 			CollectionSink.clearElementsSet();
 
-			Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty()), deadline.timeLeft());
+			Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty(), false), deadline.timeLeft());
 
 			final String savepointPath = ((JobManagerMessages.TriggerSavepointSuccess)
 					Await.result(savepointPathFuture, deadline.timeLeft())).savepointPath();
@@ -297,7 +297,7 @@ public class RescalingITCase extends TestLogger {
 			// wait until the operator is started
 			StateSourceBase.workStartedLatch.await();
 
-			Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty()), deadline.timeLeft());
+			Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty(), false), deadline.timeLeft());
 			FiniteDuration waitingTime = new FiniteDuration(10, TimeUnit.SECONDS);
 			savepointResponse = Await.result(savepointPathFuture, waitingTime);
 
@@ -407,7 +407,7 @@ public class RescalingITCase extends TestLogger {
 			// clear the CollectionSink set for the restarted job
 			CollectionSink.clearElementsSet();
 
-			Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty()), deadline.timeLeft());
+			Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty(), false), deadline.timeLeft());
 
 			final String savepointPath = ((JobManagerMessages.TriggerSavepointSuccess)
 					Await.result(savepointPathFuture, deadline.timeLeft())).savepointPath();
@@ -542,7 +542,7 @@ public class RescalingITCase extends TestLogger {
 
 			while (deadline.hasTimeLeft()) {
 
-				Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty()), deadline.timeLeft());
+				Future<Object> savepointPathFuture = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobID, Option.<String>empty(), false), deadline.timeLeft());
 				FiniteDuration waitingTime = new FiniteDuration(10, TimeUnit.SECONDS);
 				savepointResponse = Await.result(savepointPathFuture, waitingTime);
 

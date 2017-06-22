@@ -1131,7 +1131,7 @@ public class JobManagerTest extends TestLogger {
 			// Cancel with savepoint
 			File targetDirectory = tmpFolder.newFolder();
 
-			msg = new TriggerSavepoint(jobGraph.getJobID(), Option.apply(targetDirectory.getAbsolutePath()));
+			msg = new TriggerSavepoint(jobGraph.getJobID(), Option.apply(targetDirectory.getAbsolutePath()), false);
 			Future<Object> future = jobManager.ask(msg, timeout);
 			Object result = Await.result(future, timeout);
 
@@ -1242,7 +1242,7 @@ public class JobManagerTest extends TestLogger {
 
 			// Trigger savepoint
 			File targetDirectory = tmpFolder.newFolder();
-			msg = new TriggerSavepoint(jobGraph.getJobID(), Option.apply(targetDirectory.getAbsolutePath()));
+			msg = new TriggerSavepoint(jobGraph.getJobID(), Option.apply(targetDirectory.getAbsolutePath()), false);
 			Future<Object> future = jobManager.ask(msg, timeout);
 			Object result = Await.result(future, timeout);
 
