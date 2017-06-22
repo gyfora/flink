@@ -1046,6 +1046,8 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 		private DataInputView currentStateHandleInView;
 		/** Current list of ColumnFamilyHandles for all column families we restore from currentKeyGroupsStateHandle */
 		private List<ColumnFamilyHandle> currentStateHandleKVStateColumnFamilies;
+		
+		private Set<String> restoredNames = new HashSet<>();
 
 		/**
 		 * Creates a restore operation object for the given state backend instance.
@@ -1156,7 +1158,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 								restoredMetaInfo.getNamespaceSerializer(),
 								restoredMetaInfo.getStateSerializer());
 					
-					LOG.info("#### Restoring " + restoredMetaInfo.getName());
+					restoredNames.add(restoredMetaInfo.getName());
 
 					rocksDBKeyedStateBackend.restoredKvStateMetaInfos.put(restoredMetaInfo.getName(), restoredMetaInfo);
 
@@ -1185,7 +1187,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 
 				// Check that restored key groups all belong to the backend
 				Preconditions.checkState(rocksDBKeyedStateBackend.getKeyGroupRange().contains(keyGroup),
-					"The key group must belong to the backend");
+					"The key group must belong to the backend. " + restoredNames);
 
 				long offset = keyGroupOffset.f1;
 				//not empty key-group?
