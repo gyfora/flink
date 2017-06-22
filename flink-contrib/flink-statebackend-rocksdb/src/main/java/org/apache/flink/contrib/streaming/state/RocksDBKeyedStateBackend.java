@@ -1155,6 +1155,8 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 								restoredMetaInfo.getName(),
 								restoredMetaInfo.getNamespaceSerializer(),
 								restoredMetaInfo.getStateSerializer());
+					
+					LOG.info("#### Restoring " + restoredMetaInfo.getName());
 
 					rocksDBKeyedStateBackend.restoredKvStateMetaInfos.put(restoredMetaInfo.getName(), restoredMetaInfo);
 
