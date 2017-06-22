@@ -797,9 +797,9 @@ class JobManager(
               
                // Do this async, because checkpoint coordinator operations can
               // contain blocking calls to the state backend or ZooKeeper.
-              val savepointFuture = checkpoint ? 
+              val savepointFuture = if (checkpoint) 
                     checkpointCoordinator.forceTriggerCheckpoint(
-                    System.currentTimeMillis(), false) : 
+                    System.currentTimeMillis(), false) else 
                     checkpointCoordinator.triggerSavepoint(
                     System.currentTimeMillis(),
                     targetDirectory)
