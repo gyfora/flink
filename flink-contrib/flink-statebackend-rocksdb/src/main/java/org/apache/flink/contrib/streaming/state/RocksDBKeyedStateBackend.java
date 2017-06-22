@@ -1047,7 +1047,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 		/** Current list of ColumnFamilyHandles for all column families we restore from currentKeyGroupsStateHandle */
 		private List<ColumnFamilyHandle> currentStateHandleKVStateColumnFamilies;
 		
-		private Set<String> restoredNames = new HashSet<>();
+		private Set<String> restoredNames = new java.util.HashSet<>();
 
 		/**
 		 * Creates a restore operation object for the given state backend instance.
