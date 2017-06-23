@@ -30,6 +30,8 @@ import org.apache.flink.runtime.state.ChainedStateHandle;
 import org.apache.flink.runtime.state.KeyedStateHandle;
 import org.apache.flink.runtime.state.OperatorStateHandle;
 import org.apache.flink.runtime.state.StreamStateHandle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -44,6 +46,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * his format was introduced with Flink 1.3.0.
  */
 public class SavepointV2 implements Savepoint {
+	
+	public static final Logger LOG = LoggerFactory.getLogger(SavepointV2.class);
 
 	/** The savepoint version. */
 	public static final int VERSION = 2;
@@ -168,10 +172,22 @@ public class SavepointV2 implements Savepoint {
 				expandedToLegacyIds = true;
 			}
 
+			if(jobVertex == null) {
+				LOG.error("JobVertex null on restore for taskState: {} {}", taskState, taskState.getChainLength());
+				continue;
+			}
+			
 			List<OperatorID> operatorIDs = jobVertex.getOperatorIDs();
-
+			
 			for (int subtaskIndex = 0; subtaskIndex < jobVertex.getParallelism(); subtaskIndex++) {
-				SubtaskState subtaskState = taskState.getState(subtaskIndex);
+				
+				SubtaskState subtaskState = null;
+				try {
+					subtaskState = taskState.getState(subtaskIndex);
+				} catch (Throwable e) {
+					LOG.error("Subtask get error: {} {}", taskState, taskState.getChainLength());
+					throw e;
+				}
 
 				if (subtaskState == null) {
 					continue;
