@@ -1187,7 +1187,8 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 
 				// Check that restored key groups all belong to the backend
 				Preconditions.checkState(rocksDBKeyedStateBackend.getKeyGroupRange().contains(keyGroup),
-					"The key group must belong to the backend. " + restoredNames);
+					"The key group must belong to the backend. " + restoredNames + 
+					" Backend KG range: " + rocksDBKeyedStateBackend.getKeyGroupRange() + " Handle range: " + currentKeyGroupsStateHandle);
 
 				long offset = keyGroupOffset.f1;
 				//not empty key-group?
