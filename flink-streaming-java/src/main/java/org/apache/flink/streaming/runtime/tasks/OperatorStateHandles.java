@@ -105,4 +105,13 @@ public class OperatorStateHandles {
 	private static <T> T getSafeItemAtIndexOrNull(List<T> list, int idx) {
 		return CollectionUtil.isNullOrEmpty(list) ? null : list.get(idx);
 	}
+
+	@Override
+	public String toString() {
+		return "OperatorStateHandles [operatorChainIndex=" + operatorChainIndex + ", legacyOperatorState="
+				+ legacyOperatorState + ", managedKeyedState=" + managedKeyedState + ", rawKeyedState=" + rawKeyedState
+				+ ", managedOperatorState=" + managedOperatorState + ", rawOperatorState=" + rawOperatorState + "]";
+	}
+	
+	
 }

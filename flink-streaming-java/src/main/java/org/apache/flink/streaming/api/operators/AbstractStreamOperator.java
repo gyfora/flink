@@ -207,6 +207,9 @@ public abstract class AbstractStreamOperator<OUT>
 
 	@Override
 	public final void initializeState(OperatorStateHandles stateHandles) throws Exception {
+		
+		LOG.info("Restoring operator state for {} at {} with {}", container.getEnvironment().getJobVertexId(),
+				getRuntimeContext().getIndexOfThisSubtask(), stateHandles);
 
 		Collection<KeyedStateHandle> keyedStateHandlesRaw = null;
 		Collection<OperatorStateHandle> operatorStateHandlesRaw = null;
