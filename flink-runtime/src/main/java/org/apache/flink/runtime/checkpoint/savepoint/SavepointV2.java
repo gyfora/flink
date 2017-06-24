@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.checkpoint.savepoint;
 
+import org.apache.flink.hadoop.shaded.com.google.common.collect.Lists;
 import org.apache.flink.runtime.checkpoint.MasterState;
 import org.apache.flink.runtime.checkpoint.OperatorState;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
@@ -163,6 +164,15 @@ public class SavepointV2 implements Savepoint {
 
 		for (TaskState taskState : savepoint.getTaskStates()) {
 			ExecutionJobVertex jobVertex = tasks.get(taskState.getJobVertexID());
+			
+			if (!Lists.newArrayList(
+					"707eed42a9b74f065cc8bb6798b04782",
+					"1bb982d5117667879537e29b63988f55",
+					"d66fc9036251bbfec49c52ea6f3ef8b5",
+					"69ef33ec9be4d954306460c9850dc64e",
+					"9ea8e99ea357498ef33c38220fb67f46").contains(taskState.getJobVertexID())) {
+				continue;
+			}
 
 			// on the first time we can not find the execution job vertex for an id, we also consider alternative ids,
 			// for example as generated from older flink versions, to provide backwards compatibility.
