@@ -170,7 +170,7 @@ public class SavepointV2 implements Savepoint {
 					"1bb982d5117667879537e29b63988f55",
 					"d66fc9036251bbfec49c52ea6f3ef8b5",
 					"69ef33ec9be4d954306460c9850dc64e",
-					"9ea8e99ea357498ef33c38220fb67f46").contains(taskState.getJobVertexID())) {
+					"9ea8e99ea357498ef33c38220fb67f46").contains(taskState.getJobVertexID().toString())) {
 				continue;
 			}
 
