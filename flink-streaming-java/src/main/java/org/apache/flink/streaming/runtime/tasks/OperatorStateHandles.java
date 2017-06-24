@@ -112,6 +112,5 @@ public class OperatorStateHandles {
 				+ legacyOperatorState + ", managedKeyedState=" + managedKeyedState + ", rawKeyedState=" + rawKeyedState
 				+ ", managedOperatorState=" + managedOperatorState + ", rawOperatorState=" + rawOperatorState + "]";
 	}
-	
-	
+
 }
