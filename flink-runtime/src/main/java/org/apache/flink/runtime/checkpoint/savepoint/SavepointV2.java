@@ -172,22 +172,21 @@ public class SavepointV2 implements Savepoint {
 				expandedToLegacyIds = true;
 			}
 
-			if(jobVertex == null) {
-				LOG.error("JobVertex null on restore for taskState: {} {}", taskState, taskState.getChainLength());
-				continue;
+			if (jobVertex == null) {
+				throw new RuntimeException(
+						"JobVertex null on restore for taskState: " + taskState + " " + taskState.getChainLength());
 			}
-			
+
 			List<OperatorID> operatorIDs = jobVertex.getOperatorIDs();
+
+			if (taskState.getStates().size() != jobVertex.getParallelism()) {
+				throw new RuntimeException(
+						"Task parallelism doesnt match for: " + taskState + " " + taskState.getChainLength());
+			}
 			
 			for (int subtaskIndex = 0; subtaskIndex < jobVertex.getParallelism(); subtaskIndex++) {
 				
-				SubtaskState subtaskState = null;
-				try {
-					subtaskState = taskState.getState(subtaskIndex);
-				} catch (Throwable e) {
-					LOG.error("Subtask get error: {} {}", taskState, taskState.getChainLength());
-					throw e;
-				}
+				SubtaskState subtaskState = taskState.getState(subtaskIndex);
 
 				if (subtaskState == null) {
 					continue;
