@@ -246,6 +246,8 @@ public class SavepointV2 implements Savepoint {
 				}
 			}
 		}
+		
+		LOG.info("Converted: " + operatorStates.values());
 
 		return new SavepointV2(
 			savepoint.getCheckpointId(),
