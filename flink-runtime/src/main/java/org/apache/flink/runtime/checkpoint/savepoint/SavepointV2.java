@@ -37,8 +37,10 @@ import org.slf4j.LoggerFactory;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -161,16 +163,18 @@ public class SavepointV2 implements Savepoint {
 		boolean expandedToLegacyIds = false;
 
 		Map<OperatorID, OperatorState> operatorStates = new HashMap<>(savepoint.getTaskStates().size() << 1);
+		
+		List<String> toKeep = Lists.newArrayList(
+				"707eed42a9b74f065cc8bb6798b04782",
+				"1bb982d5117667879537e29b63988f55",
+				"d66fc9036251bbfec49c52ea6f3ef8b5",
+				"69ef33ec9be4d954306460c9850dc64e",
+				"9ea8e99ea357498ef33c38220fb67f46");
 
 		for (TaskState taskState : savepoint.getTaskStates()) {
 			ExecutionJobVertex jobVertex = tasks.get(taskState.getJobVertexID());
 			
-			if (!Lists.newArrayList(
-					"707eed42a9b74f065cc8bb6798b04782",
-					"1bb982d5117667879537e29b63988f55",
-					"d66fc9036251bbfec49c52ea6f3ef8b5",
-					"69ef33ec9be4d954306460c9850dc64e",
-					"9ea8e99ea357498ef33c38220fb67f46").contains(taskState.getJobVertexID().toString())) {
+			if (!toKeep.contains(taskState.getJobVertexID().toString())) {
 				continue;
 			}
 
@@ -244,6 +248,13 @@ public class SavepointV2 implements Savepoint {
 						operatorState.putState(subtaskIndex, operatorSubtaskState);
 					}
 				}
+			}
+		}
+		
+		Iterator<Entry<OperatorID, OperatorState>> iterator = operatorStates.entrySet().iterator();
+		while (iterator.hasNext()) {
+			if (!toKeep.contains(iterator.next().getKey())) {
+				iterator.remove();
 			}
 		}
 		
