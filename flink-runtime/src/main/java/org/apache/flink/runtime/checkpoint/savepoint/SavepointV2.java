@@ -253,7 +253,7 @@ public class SavepointV2 implements Savepoint {
 		
 		Iterator<Entry<OperatorID, OperatorState>> iterator = operatorStates.entrySet().iterator();
 		while (iterator.hasNext()) {
-			if (!toKeep.contains(iterator.next().getKey())) {
+			if (!toKeep.contains(iterator.next().getKey().toString())) {
 				iterator.remove();
 			}
 		}
