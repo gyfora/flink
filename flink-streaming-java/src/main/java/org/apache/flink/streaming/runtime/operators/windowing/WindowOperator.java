@@ -45,6 +45,8 @@ import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.api.java.typeutils.runtime.TupleSerializer;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.runtime.state.ArrayListSerializer;
+import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.runtime.state.VoidNamespace;
 import org.apache.flink.runtime.state.VoidNamespaceSerializer;
 import org.apache.flink.runtime.state.internal.InternalAppendingState;
@@ -212,6 +214,14 @@ public class WindowOperator<K, IN, ACC, OUT, W extends Window>
 	}
 
 	@Override
+	public void snapshotState(StateSnapshotContext context) throws Exception {
+		if (windowState instanceof CachingReducingState) {
+			((CachingReducingState) windowState).flush(1);
+		}
+		super.snapshotState(context);
+	}
+
+	@Override
 	public void open() throws Exception {
 		super.open();
 
@@ -232,9 +242,18 @@ public class WindowOperator<K, IN, ACC, OUT, W extends Window>
 		};
 
 		// create (or restore) the state that hold the actual window contents
-		// NOTE - the state may be null in the case of the overriding evicting window operator
+		// NOTE - the state may be null in the case of the overriding evicting
+		// window operator
 		if (windowStateDescriptor != null) {
-			windowState = (InternalAppendingState<W, IN, ACC>) getOrCreateKeyedState(windowSerializer, windowStateDescriptor);
+			if (windowStateDescriptor instanceof ReducingStateDescriptor) {
+				windowState = (InternalAppendingState<W, IN, ACC>) new CachingReducingState(
+						(InternalAppendingState) getOrCreateKeyedState(windowSerializer, windowStateDescriptor), this,
+						2000, 0.5, ((ReducingStateDescriptor) windowStateDescriptor).getReduceFunction());
+				LOG.info("Added caching for window op state");
+			} else {
+				windowState = (InternalAppendingState<W, IN, ACC>) getOrCreateKeyedState(windowSerializer,
+						windowStateDescriptor);
+			}
 		}
 
 		// create the typed and helper states for merging windows
