@@ -99,7 +99,7 @@ public class CheckpointCoordinator {
 
 	/** The executor used for asynchronous calls, like potentially blocking I/O */
 	private final Executor executor;
-	
+
 	/** Tasks who need to be sent a message when a checkpoint is started */
 	private final ExecutionVertex[] tasksToTrigger;
 
@@ -273,7 +273,7 @@ public class CheckpointCoordinator {
 	 * Adds the given master hook to the checkpoint coordinator. This method does nothing, if
 	 * the checkpoint coordinator already contained a hook with the same ID (as defined via
 	 * {@link MasterTriggerRestoreHook#getIdentifier()}).
-	 * 
+	 *
 	 * @param hook The hook to add.
 	 * @return True, if the hook was added, false if the checkpoint coordinator already
 	 *         contained a hook with the same ID.
@@ -420,15 +420,15 @@ public class CheckpointCoordinator {
 	public boolean triggerCheckpoint(long timestamp, boolean isPeriodic) {
 		return triggerCheckpoint(timestamp, checkpointProperties, checkpointDirectory, isPeriodic).isSuccess();
 	}
-	
-	public Future<CompletedCheckpoint> forceTriggerCheckpoint(long timestamp, boolean isPeriodic) {
+
+	public CompletableFuture<CompletedCheckpoint> forceTriggerCheckpoint(long timestamp, boolean isPeriodic) {
 		CheckpointTriggerResult triggerResult = triggerCheckpoint(timestamp, checkpointProperties.force(), checkpointDirectory,
 				isPeriodic);
 		if (triggerResult.isSuccess()) {
 			return triggerResult.getPendingCheckpoint().getCompletionFuture();
 		} else {
 			Throwable cause = new Exception("Failed to trigger savepoint: " + triggerResult.getFailureReason().message());
-			return FlinkCompletableFuture.completedExceptionally(cause);
+			return FutureUtils.completedExceptionally(cause);
 		}
 	}
 
@@ -722,7 +722,7 @@ public class CheckpointCoordinator {
 			throw new IllegalArgumentException("Received DeclineCheckpoint message for job " +
 				message.getJob() + " while this coordinator handles job " + job);
 		}
-		
+
 		final long checkpointId = message.getCheckpointId();
 		final String reason = (message.getReason() != null ? message.getReason().getMessage() : "");
 
@@ -782,7 +782,7 @@ public class CheckpointCoordinator {
 		}
 
 		final long checkpointId = message.getCheckpointId();
-		
+
 		synchronized (lock) {
 			// we need to check inside the lock for being shutdown as well, otherwise we
 			// get races and invalid error log messages
@@ -1127,25 +1127,25 @@ public class CheckpointCoordinator {
 
 	/**
 	 * Restore the state with given savepoint
-	 * 
+	 *
 	 * @param savepointPath    Location of the savepoint
-	 * @param allowNonRestored True if allowing checkpoint state that cannot be 
+	 * @param allowNonRestored True if allowing checkpoint state that cannot be
 	 *                         mapped to any job vertex in tasks.
-	 * @param tasks            Map of job vertices to restore. State for these 
-	 *                         vertices is restored via 
+	 * @param tasks            Map of job vertices to restore. State for these
+	 *                         vertices is restored via
 	 *                         {@link Execution#setInitialState(TaskStateSnapshot)}.
-	 * @param userClassLoader  The class loader to resolve serialized classes in 
-	 *                         legacy savepoint versions. 
+	 * @param userClassLoader  The class loader to resolve serialized classes in
+	 *                         legacy savepoint versions.
 	 */
 	public boolean restoreSavepoint(
-			String savepointPath, 
+			String savepointPath,
 			boolean allowNonRestored,
 			Map<JobVertexID, ExecutionJobVertex> tasks,
 			ClassLoader userClassLoader) throws Exception {
-		
+
 		Preconditions.checkNotNull(savepointPath, "The savepoint path cannot be null.");
-		
-		LOG.info("Starting job from savepoint {} ({})", 
+
+		LOG.info("Starting job from savepoint {} ({})",
 				savepointPath, (allowNonRestored ? "allowing non restored state" : ""));
 
 		// Load the savepoint as a checkpoint into the system
@@ -1153,11 +1153,11 @@ public class CheckpointCoordinator {
 				job, tasks, savepointPath, userClassLoader, allowNonRestored);
 
 		completedCheckpointStore.addCheckpoint(savepoint);
-		
+
 		// Reset the checkpoint ID counter
 		long nextCheckpointId = savepoint.getCheckpointID() + 1;
 		checkpointIdCounter.setCount(nextCheckpointId);
-		
+
 		LOG.info("Reset the checkpoint ID to {}.", nextCheckpointId);
 
 		return restoreLatestCheckpointedState(tasks, true, allowNonRestored);
@@ -1225,7 +1225,7 @@ public class CheckpointCoordinator {
 
 			periodicScheduling = true;
 			currentPeriodicTrigger = timer.scheduleAtFixedRate(
-					new ScheduledTrigger(), 
+					new ScheduledTrigger(),
 					baseInterval, baseInterval, TimeUnit.MILLISECONDS);
 		}
 	}

@@ -710,12 +710,11 @@ public class CliFrontend {
 	 */
 	private int triggerSavepoint(SavepointOptions options, JobID jobId, String savepointDirectory, boolean checkpoint) {
 		try {
-<<<<<<< HEAD
 			CustomCommandLine<?> activeCommandLine = getActiveCustomCommandLine(options.getCommandLine());
 			ClusterClient client = activeCommandLine.retrieveCluster(options.getCommandLine(), config, configurationDirectory);
 			try {
 				logAndSysout("Triggering savepoint for job " + jobId + ".");
-				CompletableFuture<String> savepointPathFuture = client.triggerSavepoint(jobId, savepointDirectory);
+				CompletableFuture<String> savepointPathFuture = client.triggerSavepoint(jobId, savepointDirectory, checkpoint);
 
 				String savepointPath;
 				try {
@@ -728,43 +727,12 @@ public class CliFrontend {
 				}
 
 				logAndSysout("Savepoint completed. Path: " + savepointPath);
-=======
-			ActorGateway jobManager = getJobManagerGateway(options);
-
-			logAndSysout("Triggering savepoint for job " + jobId + ".");
-			Future<Object> response = jobManager.ask(new TriggerSavepoint(jobId, Option.apply(savepointDirectory), checkpoint),
-					clientTimeout);
-
-			Object result;
-			try {
-				logAndSysout("Waiting for response...");
-				result = Await.result(response, clientTimeout);
-			}
-			catch (Exception e) {
-				throw new Exception("Triggering a savepoint for the job " + jobId + " failed.", e);
-			}
-
-			if (result instanceof TriggerSavepointSuccess) {
-				TriggerSavepointSuccess success = (TriggerSavepointSuccess) result;
-				logAndSysout(checkpoint ? "Checkpoint" : "Savepoint" + " completed. Path: " + success.savepointPath());
->>>>>>> a03fa30... Add Checkpoint operation to CLI
 				logAndSysout("You can resume your program from this savepoint with the run command.");
 
 				return 0;
 			}
-<<<<<<< HEAD
 			finally {
 				client.shutdown();
-=======
-			else if (result instanceof TriggerSavepointFailure) {
-				TriggerSavepointFailure failure = (TriggerSavepointFailure) result;
-				throw failure.cause();
-			}
-			else {
-//				throw new IllegalStateException("Unknown JobManager response of type " +
-//						result.getClass());
-				return 0;
->>>>>>> a03fa30... Add Checkpoint operation to CLI
 			}
 		}
 		catch (Throwable t) {

@@ -660,6 +660,10 @@ public abstract class ClusterClient {
 		}
 	}
 
+	public CompletableFuture<String> triggerSavepoint(JobID jobId, @Nullable String savepointDirectory) throws Exception {
+		return triggerSavepoint(jobId, savepointDirectory, false);
+	}
+
 	/**
 	 * Triggers a savepoint for the job identified by the job id. The savepoint will be written to the given savepoint
 	 * directory, or {@link org.apache.flink.configuration.CoreOptions#SAVEPOINT_DIRECTORY} if it is null.
@@ -669,10 +673,10 @@ public abstract class ClusterClient {
 	 * @return path future where the savepoint is located
 	 * @throws Exception if  no connection to the cluster could be established
 	 */
-	public CompletableFuture<String> triggerSavepoint(JobID jobId, @Nullable String savepointDirectory) throws Exception {
+	public CompletableFuture<String> triggerSavepoint(JobID jobId, @Nullable String savepointDirectory, boolean checkpoint) throws Exception {
 		final ActorGateway jobManager = getJobManagerGateway();
 
-		Future<Object> response = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobId, Option.apply(savepointDirectory)),
+		Future<Object> response = jobManager.ask(new JobManagerMessages.TriggerSavepoint(jobId, Option.apply(savepointDirectory), checkpoint),
 			new FiniteDuration(1, TimeUnit.HOURS));
 		CompletableFuture<Object> responseFuture = FutureUtils.toJava(response);
 
