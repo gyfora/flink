@@ -19,6 +19,7 @@ package org.apache.flink.contrib.streaming.state;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.state.AggregatingStateDescriptor;
 import org.apache.flink.api.common.state.FoldingStateDescriptor;
 import org.apache.flink.api.common.state.ListStateDescriptor;
@@ -204,6 +205,10 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 
 	/** Unique ID of this backend. */
 	private UUID backendUID;
+
+	private static final String SST_FILE_SUFFIX = ".sst";
+
+	public final Map<String, MapFunction<byte[], byte[]>> stateTransformers = new HashMap<>();
 
 	public RocksDBKeyedStateBackend(
 		String operatorIdentifier,
@@ -512,6 +517,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 			this.keyGroupRangeOffsets = new KeyGroupRangeOffsets(stateBackend.keyGroupRange);
 			this.snapshotCloseableRegistry = registry;
 			this.dbLease = this.stateBackend.rocksDBResourceGuard.acquireResource();
+			this.transformers = new MapFunction[stateBackend.kvStateInformation.size()];
 		}
 
 		/**
@@ -605,6 +611,8 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 			this.dbLease.close();
 		}
 
+		private MapFunction<byte[], byte[]>[] transformers;
+
 		private void writeKVStateMetaData() throws IOException {
 
 			List<RegisteredKeyedBackendStateMetaInfo.Snapshot<?, ?>> metaInfoSnapshots =
@@ -612,7 +620,15 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 
 			int kvStateId = 0;
 			for (Map.Entry<String, Tuple2<ColumnFamilyHandle, RegisteredKeyedBackendStateMetaInfo<?, ?>>> column :
-				stateBackend.kvStateInformation.entrySet()) {
+					stateBackend.kvStateInformation.entrySet()) {
+
+				MapFunction<byte[], byte[]> transformer = stateBackend.stateTransformers.get(column.getKey());
+				transformers[kvStateId] = transformer != null ? transformer : new MapFunction<byte[], byte[]>() {
+					@Override
+					public byte[] map(byte[] b) throws Exception {
+						return b;
+					}
+				};
 
 				metaInfoSnapshots.add(column.getValue().f1.snapshot());
 
@@ -641,6 +657,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 			byte[] previousValue = null;
 			OutputStream kgOutStream = null;
 			DataOutputView kgOutView = null;
+			int previousId = -1;
 
 			try {
 				// Here we transfer ownership of RocksIterators to the RocksDBMergeIterator
@@ -659,6 +676,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 						kgOutView = new DataOutputViewStreamWrapper(kgOutStream);
 						//TODO this could be aware of keyGroupPrefixBytes and write only one byte if possible
 						kgOutView.writeShort(mergeIterator.kvStateId());
+						previousId = mergeIterator.kvStateId();
 						previousKey = mergeIterator.key();
 						previousValue = mergeIterator.value();
 						mergeIterator.next();
@@ -678,7 +696,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 							setMetaDataFollowsFlagInKey(previousKey);
 						}
 
-						writeKeyValuePair(previousKey, previousValue, kgOutView);
+						writeKeyValuePair(previousKey, previousValue, kgOutView, previousId);
 
 						//write meta data if we have to
 						if (mergeIterator.isNewKeyGroup()) {
@@ -702,6 +720,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 						//request next k/v pair
 						previousKey = mergeIterator.key();
 						previousValue = mergeIterator.value();
+						previousId = mergeIterator.kvStateId();
 						mergeIterator.next();
 					}
 				}
@@ -710,7 +729,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 				if (previousKey != null) {
 					assert (!hasMetaDataFollowsFlag(previousKey));
 					setMetaDataFollowsFlagInKey(previousKey);
-					writeKeyValuePair(previousKey, previousValue, kgOutView);
+					writeKeyValuePair(previousKey, previousValue, kgOutView, previousId);
 					//TODO this could be aware of keyGroupPrefixBytes and write only one byte if possible
 					kgOutView.writeShort(END_OF_KEY_GROUP_MARK);
 					// this will just close the outer stream
@@ -724,9 +743,13 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 			}
 		}
 
-		private void writeKeyValuePair(byte[] key, byte[] value, DataOutputView out) throws IOException {
+		private void writeKeyValuePair(byte[] key, byte[] value, DataOutputView out, int previousId) throws IOException {
 			BytePrimitiveArraySerializer.INSTANCE.serialize(key, out);
-			BytePrimitiveArraySerializer.INSTANCE.serialize(value, out);
+			try {
+				BytePrimitiveArraySerializer.INSTANCE.serialize(transformers[previousId].map(value), out);
+			} catch (Exception e) {
+				throw new RuntimeException(e);
+			}
 		}
 
 		static void setMetaDataFollowsFlagInKey(byte[] key) {
@@ -2022,5 +2045,14 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 				throw new FlinkRuntimeException("Failed to access state [" + state + "]", e);
 			}
 		}
+	}
+
+	@Override
+	public boolean supportsAsynchronousSnapshots() {
+		return true;
+	}
+
+	public void setSavpointStateTransformer(String stateName, MapFunction<byte[], byte[]> transformer) {
+		stateTransformers.put(stateName, transformer);
 	}
 }
