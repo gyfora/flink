@@ -20,6 +20,7 @@ package org.apache.flink.contrib.streaming.state;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.state.AggregatingStateDescriptor;
 import org.apache.flink.api.common.state.FoldingStateDescriptor;
 import org.apache.flink.api.common.state.ListStateDescriptor;
@@ -740,6 +741,14 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 			} finally {
 				// this will just close the outer stream
 				IOUtils.closeQuietly(kgOutStream);
+			}
+			
+			for (MapFunction<?, ?> transformer : transformers) {
+				try {
+					if(transformer instanceof RichMapFunction) {
+						((RichMapFunction)transformer).close();
+					}
+				} catch (Exception e) {}
 			}
 		}
 
