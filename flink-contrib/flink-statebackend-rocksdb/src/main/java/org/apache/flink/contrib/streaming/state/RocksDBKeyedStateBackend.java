@@ -207,8 +207,6 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 	/** Unique ID of this backend. */
 	private UUID backendUID;
 
-	private static final String SST_FILE_SUFFIX = ".sst";
-
 	public final Map<String, MapFunction<byte[], byte[]>> stateTransformers = new HashMap<>();
 
 	public RocksDBKeyedStateBackend(
@@ -742,7 +740,7 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 				// this will just close the outer stream
 				IOUtils.closeQuietly(kgOutStream);
 			}
-			
+
 			for (MapFunction<?, ?> transformer : transformers) {
 				try {
 					if(transformer instanceof RichMapFunction) {
@@ -2054,11 +2052,6 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 				throw new FlinkRuntimeException("Failed to access state [" + state + "]", e);
 			}
 		}
-	}
-
-	@Override
-	public boolean supportsAsynchronousSnapshots() {
-		return true;
 	}
 
 	public void setSavpointStateTransformer(String stateName, MapFunction<byte[], byte[]> transformer) {
