@@ -82,6 +82,8 @@ public class CachingReducingState<V> implements ReducingState<V>, InternalAppend
 
 		if (prevKey != null) {
 			op.setCurrentKey(prevKey);
+			//Narain: gettng null pointer when namespace is null
+			if(prevNameSpace !=null)
 			setCurrentNamespace(prevNameSpace);
 		}
 
