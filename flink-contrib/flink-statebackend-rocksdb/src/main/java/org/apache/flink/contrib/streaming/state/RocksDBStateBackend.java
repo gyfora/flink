@@ -19,8 +19,11 @@ package org.apache.flink.contrib.streaming.state;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.query.TaskKvStateRegistry;
 import org.apache.flink.runtime.state.AbstractKeyedStateBackend;
@@ -29,6 +32,8 @@ import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.DefaultOperatorStateBackend;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.OperatorStateBackend;
+import org.apache.flink.runtime.state.OperatorStateHandle;
+import org.apache.flink.runtime.state.OperatorStateHandle.StateMetaInfo;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.util.AbstractID;
 
@@ -41,13 +46,18 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.RunnableFuture;
 
 import static java.util.Objects.requireNonNull;
 
@@ -302,7 +312,7 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 		File instanceBasePath =
 				new File(getNextStoragePath(), "job-" + jobId + "_op-" + operatorIdentifier + "_uuid-" + UUID.randomUUID());
 
-		return new RocksDBKeyedStateBackend<>(
+		 RocksDBKeyedStateBackend<K> rocksDBKeyedStateBackend = new RocksDBKeyedStateBackend<>(
 				operatorIdentifier,
 				env.getUserClassLoader(),
 				instanceBasePath,
@@ -314,6 +324,8 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 				keyGroupRange,
 				env.getExecutionConfig(),
 				enableIncrementalCheckpointing);
+		 rocksDBKeyedStateBackend.dropStates(droppedStates);
+		 return rocksDBKeyedStateBackend;
 	}
 
 	// ------------------------------------------------------------------------
@@ -484,12 +496,70 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 		Environment env,
 		String operatorIdentifier) throws Exception {
 
-		//the default for RocksDB; eventually there can be a operator state backend based on RocksDB, too.
 		final boolean asyncSnapshots = true;
-		return new DefaultOperatorStateBackend(
-			env.getUserClassLoader(),
-			env.getExecutionConfig(),
-			asyncSnapshots);
+
+		return new OperatorStateBackend() {
+
+			DefaultOperatorStateBackend backend = new DefaultOperatorStateBackend(
+					env.getUserClassLoader(),
+					env.getExecutionConfig(),
+					asyncSnapshots);;
+
+			@Override
+			public void close() throws IOException {
+				backend.close();
+			}
+
+			@Override
+			public RunnableFuture<OperatorStateHandle> snapshot(long checkpointId, long timestamp,
+					CheckpointStreamFactory streamFactory, CheckpointOptions checkpointOptions) throws Exception {
+				return backend.snapshot(checkpointId, timestamp, streamFactory, checkpointOptions);
+			}
+
+			@Override
+			public void restore(Collection<OperatorStateHandle> state) throws Exception {
+				for (OperatorStateHandle handle : state) {
+					LOG.info("OP States:" + handle.getStateNameToPartitionOffsets().toString());
+					for (String name : droppedStates) {
+						StateMetaInfo remove = handle.getStateNameToPartitionOffsets().remove(name);
+						if (remove != null) {
+							LOG.info("Dropped {}", remove);
+						}
+					}
+				}
+				backend.restore(state);
+			}
+
+			@Override
+			public <S> ListState<S> getUnionListState(ListStateDescriptor<S> stateDescriptor) throws Exception {
+				return backend.getUnionListState(stateDescriptor);
+			}
+
+			@Override
+			public <T extends Serializable> ListState<T> getSerializableListState(String stateName) throws Exception {
+				return backend.getSerializableListState(stateName);
+			}
+
+			@Override
+			public Set<String> getRegisteredStateNames() {
+				return backend.getRegisteredStateNames();
+			}
+
+			@Override
+			public <S> ListState<S> getOperatorState(ListStateDescriptor<S> stateDescriptor) throws Exception {
+				return backend.getOperatorState(stateDescriptor);
+			}
+
+			@Override
+			public <S> ListState<S> getListState(ListStateDescriptor<S> stateDescriptor) throws Exception {
+				return backend.getListState(stateDescriptor);
+			}
+
+			@Override
+			public void dispose() {
+				backend.dispose();
+			}
+		};
 	}
 
 	@Override
@@ -567,5 +637,11 @@ public class RocksDBStateBackend extends AbstractStateBackend {
 		final Field initField = org.rocksdb.NativeLibraryLoader.class.getDeclaredField("initialized");
 		initField.setAccessible(true);
 		initField.setBoolean(null, false);
+	}
+	
+	HashSet<String> droppedStates = new HashSet<>();
+
+	public void dropStates(HashSet<String> states) {
+		this.droppedStates = states;
 	}
 }
