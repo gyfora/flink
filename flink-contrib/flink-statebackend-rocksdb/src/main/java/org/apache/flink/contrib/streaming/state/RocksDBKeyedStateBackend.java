@@ -1068,6 +1068,8 @@ public class RocksDBKeyedStateBackend<K> extends AbstractKeyedStateBackend<K> {
 			throw ex;
 		}
 		
+		LOG.info("Dropping states: {}", droppedStates);
+		LOG.info("Current states: {}, ", kvStateInformation.keySet());
 		for(String dropped: droppedStates) {
 			Tuple2<ColumnFamilyHandle, RegisteredKeyedBackendStateMetaInfo<?, ?>> t = kvStateInformation.remove(dropped);
 			restoredKvStateMetaInfos.remove(dropped);
