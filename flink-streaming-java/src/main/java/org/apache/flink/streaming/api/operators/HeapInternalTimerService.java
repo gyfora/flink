@@ -438,6 +438,10 @@ public class HeapInternalTimerService<K, N> implements InternalTimerService<N>, 
 		}
 		return count;
 	}
+	
+	public boolean isInitialized() {
+		return isInitialized;
+	}
 
 	@VisibleForTesting
 	public int getLocalKeyGroupRangeStartIdx() {

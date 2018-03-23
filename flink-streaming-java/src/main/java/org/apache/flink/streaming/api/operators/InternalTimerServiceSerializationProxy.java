@@ -92,15 +92,17 @@ public class InternalTimerServiceSerializationProxy<K, N> extends PostVersionedI
 	public void write(DataOutputView out) throws IOException {
 		super.write(out);
 
-		out.writeInt(timerServices.size());
+		out.writeInt((int) timerServices.values().stream().filter(HeapInternalTimerService::isInitialized).count());
 		for (Map.Entry<String, HeapInternalTimerService<K, N>> entry : timerServices.entrySet()) {
 			String serviceName = entry.getKey();
 			HeapInternalTimerService<K, N> timerService = entry.getValue();
-
-			out.writeUTF(serviceName);
-			InternalTimersSnapshotReaderWriters
-				.getWriterForVersion(VERSION, timerService.snapshotTimersForKeyGroup(keyGroupIdx))
-				.writeTimersSnapshot(out);
+			
+			if (timerService.isInitialized()) {
+				out.writeUTF(serviceName);
+				InternalTimersSnapshotReaderWriters
+						.getWriterForVersion(VERSION, timerService.snapshotTimersForKeyGroup(keyGroupIdx))
+						.writeTimersSnapshot(out);
+			}
 		}
 	}
 
