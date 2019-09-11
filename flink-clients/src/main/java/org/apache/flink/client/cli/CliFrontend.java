@@ -213,86 +213,87 @@ public class CliFrontend {
 			CommandLine commandLine,
 			RunOptions runOptions,
 			PackagedProgram program) throws ProgramInvocationException, FlinkException {
-		final ClusterDescriptor<T> clusterDescriptor = customCommandLine.createClusterDescriptor(commandLine);
 
+		final boolean isDetachedMode = runOptions.getDetachedMode();
+		final int parallelism = (runOptions.getParallelism() == ExecutionConfig.PARALLELISM_DEFAULT)
+			? defaultParallelism
+			: runOptions.getParallelism();
+
+		final T clusterId = customCommandLine.getClusterId(commandLine);
+
+		ClusterDescriptor<T> clusterDescriptor = null;
 		try {
-			final T clusterId = customCommandLine.getClusterId(commandLine);
+			clusterDescriptor = customCommandLine.createClusterDescriptor(commandLine);
 
-			final ClusterClient<T> client;
-
-			// directly deploy the job if the cluster is started in job mode and detached
-			if (clusterId == null && runOptions.getDetachedMode()) {
-				int parallelism = runOptions.getParallelism() == -1 ? defaultParallelism : runOptions.getParallelism();
-
+			if (clusterId == null && isDetachedMode) {
+				// directly deploy the job if the cluster is started in job mode and detached
 				final JobGraph jobGraph = PackagedProgramUtils.createJobGraph(program, configuration, parallelism);
-
 				final ClusterSpecification clusterSpecification = customCommandLine.getClusterSpecification(commandLine);
-				client = clusterDescriptor.deployJobCluster(
-					clusterSpecification,
-					jobGraph,
-					runOptions.getDetachedMode());
 
-				logAndSysout("Job has been submitted with JobID " + jobGraph.getJobID());
-
-				try {
-					client.close();
+				try (ClusterClient<T> ignore = clusterDescriptor.deployJobCluster(clusterSpecification, jobGraph, isDetachedMode)) {
+					logAndSysout("Job has been submitted with JobID " + jobGraph.getJobID());
 				} catch (Exception e) {
 					LOG.info("Could not properly shut down the client.", e);
 				}
-			} else {
-				final Thread shutdownHook;
-				if (clusterId != null) {
+			} else if (clusterId != null) {
+				ClusterClient<T> client = null;
+				try {
 					client = clusterDescriptor.retrieve(clusterId);
-					shutdownHook = null;
-				} else {
+					client.setDetached(isDetachedMode);
+					executeProgram(program, client, parallelism);
+				} finally {
+					if (client != null) {
+						try {
+							client.close();
+						} catch (Exception e) {
+							LOG.info("Could not properly shut down the client.", e);
+						}
+					}
+				}
+			} else {
+				// assert clusterId == null && isDetachedMode == false;
+				// i.e., attached per-job mode
+
+				Thread shutdownHook = null;
+				ClusterClient<T> client = null;
+				try {
 					// also in job mode we have to deploy a session cluster because the job
 					// might consist of multiple parts (e.g. when using collect)
 					final ClusterSpecification clusterSpecification = customCommandLine.getClusterSpecification(commandLine);
 					client = clusterDescriptor.deploySessionCluster(clusterSpecification);
 					// if not running in detached mode, add a shutdown hook to shut down cluster if client exits
 					// there's a race-condition here if cli is killed before shutdown hook is installed
-					if (!runOptions.getDetachedMode() && runOptions.isShutdownOnAttachedExit()) {
+					if (runOptions.isShutdownOnAttachedExit()) {
 						shutdownHook = ShutdownHookUtil.addShutdownHook(client::shutDownCluster, client.getClass().getSimpleName(), LOG);
-					} else {
-						shutdownHook = null;
-					}
-				}
-
-				try {
-					client.setDetached(runOptions.getDetachedMode());
-
-					LOG.debug("{}", runOptions.getSavepointRestoreSettings());
-
-					int userParallelism = runOptions.getParallelism();
-					LOG.debug("User parallelism is set to {}", userParallelism);
-					if (ExecutionConfig.PARALLELISM_DEFAULT == userParallelism) {
-						userParallelism = defaultParallelism;
 					}
 
-					executeProgram(program, client, userParallelism);
+					executeProgram(program, client, parallelism);
 				} finally {
-					if (clusterId == null && !client.isDetached()) {
-						// terminate the cluster only if we have started it before and if it's not detached
+					if (client != null) {
 						try {
 							client.shutDownCluster();
-						} catch (final Exception e) {
+						} catch (Exception e) {
 							LOG.info("Could not properly terminate the Flink cluster.", e);
 						}
+
 						if (shutdownHook != null) {
 							// we do not need the hook anymore as we have just tried to shutdown the cluster.
 							ShutdownHookUtil.removeShutdownHook(shutdownHook, client.getClass().getSimpleName(), LOG);
 						}
-					}
-					try {
-						client.close();
-					} catch (Exception e) {
-						LOG.info("Could not properly shut down the client.", e);
+
+						try {
+							client.close();
+						} catch (Exception e) {
+							LOG.info("Could not properly shut down the client.", e);
+						}
 					}
 				}
 			}
 		} finally {
 			try {
-				clusterDescriptor.close();
+				if (clusterDescriptor != null) {
+					clusterDescriptor.close();
+				}
 			} catch (Exception e) {
 				LOG.info("Could not properly close the cluster descriptor.", e);
 			}
